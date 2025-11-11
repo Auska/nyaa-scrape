@@ -104,17 +104,17 @@ go run main.go -help
 
 1. 发送搜索结果到Transmission：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send -transmission http://localhost:9091/transmission/rpc
+   cd tools && go run query_tool.go -regex "One Piece" -transmission http://localhost:9091/transmission/rpc
    ```
 
 2. 使用认证信息发送到Transmission（推荐方式）：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send -transmission "username:password@http://localhost:9091/transmission/rpc"
+   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc"
    ```
 
 3. 预览将要发送的内容（不实际发送）：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send -transmission "username:password@http://localhost:9091/transmission/rpc" -dry-run
+   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc" -dry-run
    ```
 
 4. 程序会自动处理Transmission的CSRF保护机制（409错误和session-id），无需手动配置。
@@ -125,12 +125,12 @@ go run main.go -help
 
 1. 发送搜索结果到aria2（使用令牌认证）：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send-aria2 -aria2 "token@http://localhost:6800/jsonrpc"
+   cd tools && go run query_tool.go -regex "One Piece" -aria2 "token@http://localhost:6800/jsonrpc"
    ```
 
 2. 预览将要发送的内容（不实际发送）：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send-aria2 -aria2 "token@http://localhost:6800/jsonrpc" -dry-run
+   cd tools && go run query_tool.go -regex "One Piece" -aria2 "token@http://localhost:6800/jsonrpc" -dry-run
    ```
 
 3. 程序会自动从URL中提取令牌并进行认证。
@@ -139,12 +139,12 @@ go run main.go -help
 
 您还可以同时将磁力链接发送到Transmission和aria2：
    ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -send -transmission "username:password@http://localhost:9091/transmission/rpc" -send-aria2 -aria2 "token@http://localhost:6800/jsonrpc"
+   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc" -aria2 "token@http://localhost:6800/jsonrpc"
    ```
 
 5. 组合使用所有参数：
    ```bash
-   cd tools && go run query_tool.go -db ../custom.db -regex "One Piece" -limit 5 -send -transmission "username:password@http://localhost:9091/transmission/rpc" -send-aria2 -aria2 "token@http://localhost:6800/jsonrpc" -dry-run
+   cd tools && go run query_tool.go -db ../custom.db -regex "One Piece" -limit 5 -transmission "username:password@http://localhost:9091/transmission/rpc" -aria2 "token@http://localhost:6800/jsonrpc" -dry-run
    ```
 
 ### 3. 查询数据
