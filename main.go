@@ -46,7 +46,9 @@ func NewDBService(dbPath string) (*DBService, error) {
 		magnet TEXT,
 		category TEXT,
 		size TEXT,
-		date TEXT
+		date TEXT,
+		pushed_to_transmission BOOLEAN DEFAULT 0,
+		pushed_to_aria2 BOOLEAN DEFAULT 0
 	);`
 	_, err = db.Exec(sqlStmt)
 	if err != nil {

@@ -30,50 +30,73 @@ func main() {
 	defer db.Close()
 
 	var rows *sql.Rows
-	var query string
-	
-	if *searchPattern != "" {
-		// Use LIKE with % wildcards for pattern matching
-		likePattern := "%" + *searchPattern + "%"
-		query = "SELECT id, name, category, size, date, magnet FROM torrents WHERE name LIKE ? ORDER BY id DESC LIMIT ?"
-		rows, err = db.Query(query, likePattern, *limit)
-		if err != nil {
-			log.Fatal("Failed to query database:", err)
-		}
-		fmt.Printf("Torrents matching pattern '%s' (limit %d):\n", *searchPattern, *limit)
-	} else {
-		query = "SELECT id, name, category, size, date, magnet FROM torrents ORDER BY id DESC LIMIT ?"
-		rows, err = db.Query(query, *limit)
-		if err != nil {
-			log.Fatal("Failed to query database:", err)
-		}
-		fmt.Printf("Latest %d torrents:\n", *limit)
+var query string
+
+if *searchPattern != "" {
+	// Use LIKE with % wildcards for pattern matching
+	likePattern := "%" + *searchPattern + "%"
+	query = "SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents WHERE name LIKE ? ORDER BY id DESC LIMIT ?"
+	rows, err = db.Query(query, likePattern, *limit)
+	if err != nil {
+		log.Fatal("Failed to query database:", err)
 	}
-	
-	defer rows.Close()
+	fmt.Printf("Torrents matching pattern '%s' (limit %d):\n", *searchPattern, *limit)
+} else {
+	query = "SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents ORDER BY id DESC LIMIT ?"
+	rows, err = db.Query(query, *limit)
+	if err != nil {
+		log.Fatal("Failed to query database:", err)
+	}
+	fmt.Printf("Latest %d torrents:\n", *limit)
+}
 
-	fmt.Printf("%-10s %-50s %-25s %-10s %-10s\n", "ID", "Name", "Category", "Size", "Date")
-	fmt.Println(strings.Repeat("-", 120))
+defer rows.Close()
 
-	var magnetLinks []string
-	for rows.Next() {
-		var id int
+fmt.Printf("%-10s %-50s %-25s %-10s %-10s %-12s %-12s\n", "ID", "Name", "Category", "Size", "Date", "To Trans", "To Aria2")
+fmt.Println(strings.Repeat("-", 135))
+
+// Create a map to track which magnet links correspond to which IDs
+magnetToIdMap := make(map[string]int)
+var magnetLinks []string
+for rows.Next() {
+	var id int
 		var name, category, size, date string
 		var magnet string
+		var pushedToTransmission, pushedToAria2 bool
 
-		err := rows.Scan(&id, &name, &category, &size, &date, &magnet)
-		if err != nil {
-			log.Fatal("Failed to scan row:", err)
+		err := rows.Scan(&id, &name, &category, &size, &date, &magnet, &pushedToTransmission, &pushedToAria2)
+	if err != nil {
+		log.Fatal("Failed to scan row:", err)
+	}
+
+		// Format the push status
+		transStatus := "No"
+		if pushedToTransmission {
+			transStatus = "Yes"
+		}
+		aria2Status := "No"
+		if pushedToAria2 {
+			aria2Status = "Yes"
 		}
 
-		fmt.Printf("%-10d %-50s %-25s %-10s %-10s\n", 
-			id, truncateString(name, 49), category, size, date)
+		fmt.Printf("%-10d %-50s %-25s %-10s %-10s %-12s %-12s\n", 
+			id, truncateString(name, 49), category, size, date, transStatus, aria2Status)
 		
-		// Collect magnet links if we're going to send them to Transmission or aria2
-		if (*transmissionURL != "" || *aria2URL != "") && magnet != "" {
+		// Collect magnet links if we're going to send them to Transmission or aria2 and they haven't been pushed yet
+	if *transmissionURL != "" && !pushedToTransmission && magnet != "" {
+		magnetLinks = append(magnetLinks, magnet)
+		magnetToIdMap[magnet] = id
+	} else if *aria2URL != "" && !pushedToAria2 && magnet != "" {
+		magnetLinks = append(magnetLinks, magnet)
+		magnetToIdMap[magnet] = id
+	} else if *transmissionURL != "" && *aria2URL != "" {
+		// If both URLs are provided, include torrents that haven't been pushed to either
+		if (!pushedToTransmission || !pushedToAria2) && magnet != "" {
 			magnetLinks = append(magnetLinks, magnet)
+			magnetToIdMap[magnet] = id
 		}
 	}
+}
 
 	// Show matching count if using search pattern
 	if *searchPattern != "" {
@@ -119,6 +142,37 @@ func main() {
 				}
 			}
 			fmt.Printf("Successfully sent %d out of %d magnet links to Transmission\n", successCount, len(magnetLinks))
+			
+			// Update database to mark torrents as pushed to Transmission
+			if successCount > 0 {
+				// Use a transaction to ensure atomic updates
+				tx, err := db.Begin()
+				if err != nil {
+					log.Printf("Failed to begin transaction: %v", err)
+				} else {
+					updateStmt, err := tx.Prepare("UPDATE torrents SET pushed_to_transmission = 1 WHERE id = ?")
+					if err != nil {
+						log.Printf("Failed to prepare update statement: %v", err)
+						tx.Rollback()
+					} else {
+						defer updateStmt.Close()
+						
+						// Update only the torrents that were successfully sent
+						for i := 0; i < successCount; i++ {
+							magnet := magnetLinks[i]
+							id, exists := magnetToIdMap[magnet]
+							if exists {
+								if _, err := updateStmt.Exec(id); err != nil {
+									log.Printf("Failed to update torrent ID %d: %v", id, err)
+								} else {
+									fmt.Printf("Marked torrent ID %d as pushed to Transmission in database\n", id)
+								}
+							}
+						}
+					}
+					tx.Commit()
+				}
+			}
 		}
 	}
 	
@@ -144,6 +198,37 @@ func main() {
 				}
 			}
 			fmt.Printf("Successfully sent %d out of %d magnet links to aria2\n", successCount, len(magnetLinks))
+			
+			// Update database to mark torrents as pushed to aria2
+			if successCount > 0 {
+				// Use a transaction to ensure atomic updates
+				tx, err := db.Begin()
+				if err != nil {
+					log.Printf("Failed to begin transaction: %v", err)
+				} else {
+					updateStmt, err := tx.Prepare("UPDATE torrents SET pushed_to_aria2 = 1 WHERE id = ?")
+					if err != nil {
+						log.Printf("Failed to prepare update statement: %v", err)
+						tx.Rollback()
+					} else {
+						defer updateStmt.Close()
+						
+						// Update only the torrents that were successfully sent
+						for i := 0; i < successCount; i++ {
+							magnet := magnetLinks[i]
+							id, exists := magnetToIdMap[magnet]
+							if exists {
+								if _, err := updateStmt.Exec(id); err != nil {
+									log.Printf("Failed to update torrent ID %d: %v", id, err)
+								} else {
+									fmt.Printf("Marked torrent ID %d as pushed to aria2 in database\n", id)
+								}
+							}
+						}
+					}
+					tx.Commit()
+				}
+			}
 		}
 	}
 }
