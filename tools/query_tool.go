@@ -19,8 +19,10 @@ func main() {
 	searchPattern := flag.String("regex", "", "Text pattern to match in torrent names (using LIKE operator)")
 	limit := flag.Int("limit", 10, "Number of results to show")
 	transmissionURL := flag.String("transmission", "", "Transmission RPC URL (e.g., user:pass@http://localhost:9091/transmission/rpc)")
+	aria2URL := flag.String("aria2", "", "aria2 RPC URL (e.g., token@http://localhost:6800/jsonrpc)")
 	sendToTransmission := flag.Bool("send", false, "Send magnet links to Transmission")
-	dryRun := flag.Bool("dry-run", false, "Show what would be sent to Transmission without actually sending")
+	sendToAria2 := flag.Bool("send-aria2", false, "Send magnet links to aria2")
+	dryRun := flag.Bool("dry-run", false, "Show what would be sent to Transmission/aria2 without actually sending")
 	flag.Parse()
 
 	db, err := sql.Open("sqlite3", *dbPath)
@@ -69,8 +71,8 @@ func main() {
 		fmt.Printf("%-10d %-50s %-25s %-10s %-10s\n", 
 			id, truncateString(name, 49), category, size, date)
 		
-		// Collect magnet links if we're going to send them to Transmission
-		if *sendToTransmission && magnet != "" {
+		// Collect magnet links if we're going to send them to Transmission or aria2
+		if (*sendToTransmission || *sendToAria2) && magnet != "" {
 			magnetLinks = append(magnetLinks, magnet)
 		}
 	}
@@ -101,35 +103,62 @@ func main() {
 	if *sendToTransmission {
 		if len(magnetLinks) == 0 {
 			fmt.Println("\nNo magnet links found to send to Transmission.")
-			return
-		}
-		
-		if *transmissionURL == "" {
+		} else if *transmissionURL == "" {
 			log.Fatal("Transmission URL is required when using -send flag")
-		}
-		
-		if *dryRun {
-			fmt.Printf("\nDry run mode - would send %d magnet links to Transmission:\n", len(magnetLinks))
-			for i, link := range magnetLinks {
-				fmt.Printf("%d. %s\n", i+1, link)
-			}
-			return
-		}
-		
-		fmt.Printf("\nSending %d magnet links to Transmission...\n", len(magnetLinks))
-		// Parse URL for embedded credentials
-		parsedURL, user, pass := parseTransmissionURL(*transmissionURL)
-		
-		successCount := 0
-		for i, link := range magnetLinks {
-			if err := sendToTransmissionRPC(parsedURL, user, pass, link); err != nil {
-				fmt.Printf("Failed to send magnet link %d: %v\n", i+1, err)
+		} else {
+			if *dryRun {
+				fmt.Printf("\nDry run mode - would send %d magnet links to Transmission:\n", len(magnetLinks))
+				for i, link := range magnetLinks {
+					fmt.Printf("%d. %s\n", i+1, link)
+				}
 			} else {
-				fmt.Printf("Successfully sent magnet link %d to Transmission\n", i+1)
-				successCount++
+				fmt.Printf("\nSending %d magnet links to Transmission...\n", len(magnetLinks))
+				// Parse URL for embedded credentials
+				parsedURL, user, pass := parseTransmissionURL(*transmissionURL)
+				
+				successCount := 0
+				for i, link := range magnetLinks {
+					if err := sendToTransmissionRPC(parsedURL, user, pass, link); err != nil {
+						fmt.Printf("Failed to send magnet link %d to Transmission: %v\n", i+1, err)
+					} else {
+						fmt.Printf("Successfully sent magnet link %d to Transmission\n", i+1)
+						successCount++
+					}
+				}
+				fmt.Printf("Successfully sent %d out of %d magnet links to Transmission\n", successCount, len(magnetLinks))
 			}
 		}
-		fmt.Printf("Successfully sent %d out of %d magnet links to Transmission\n", successCount, len(magnetLinks))
+	}
+	
+	// Send magnet links to aria2 if requested
+	if *sendToAria2 {
+		if len(magnetLinks) == 0 {
+			fmt.Println("\nNo magnet links found to send to aria2.")
+		} else if *aria2URL == "" {
+			log.Fatal("aria2 URL is required when using -send-aria2 flag")
+		} else {
+			if *dryRun {
+				fmt.Printf("\nDry run mode - would send %d magnet links to aria2:\n", len(magnetLinks))
+				for i, link := range magnetLinks {
+					fmt.Printf("%d. %s\n", i+1, link)
+				}
+			} else {
+				fmt.Printf("\nSending %d magnet links to aria2...\n", len(magnetLinks))
+				// Parse URL for embedded token
+				parsedURL, token := parseAria2URL(*aria2URL)
+				
+				successCount := 0
+				for i, link := range magnetLinks {
+					if err := sendToAria2RPC(parsedURL, token, link); err != nil {
+						fmt.Printf("Failed to send magnet link %d to aria2: %v\n", i+1, err)
+					} else {
+						fmt.Printf("Successfully sent magnet link %d to aria2\n", i+1)
+						successCount++
+					}
+				}
+				fmt.Printf("Successfully sent %d out of %d magnet links to aria2\n", successCount, len(magnetLinks))
+			}
+		}
 	}
 }
 
@@ -266,4 +295,88 @@ func parseTransmissionURL(rawURL string) (string, string, string) {
 	
 	// No credentials found in the expected format, return as-is
 	return rawURL, "", ""
+}
+
+// parseAria2URL extracts token from URL if present
+func parseAria2URL(rawURL string) (string, string) {
+	// Check if URL contains token in format "token@http://host"
+	// This handles the format "token@http://host:port/path"
+	if strings.Contains(rawURL, "@") && strings.Contains(rawURL, "://") {
+		// Find the position of the first "@"
+		atIndex := strings.Index(rawURL, "@")
+		// Find the position of the first "://"
+		protoIndex := strings.Index(rawURL, "://")
+		
+		// If "@" comes before "://", it means token is at the beginning
+		if atIndex < protoIndex {
+			// Split by "@" to separate token from the URL
+			parts := strings.SplitN(rawURL, "@", 2)
+			if len(parts) != 2 {
+				return rawURL, ""
+			}
+			
+			token := parts[0]
+			urlPart := parts[1]
+			
+			// Return the URL part as the URL, and extracted token
+			return urlPart, token
+		}
+	}
+	
+	// No token found in the expected format, return as-is
+	return rawURL, ""
+}
+
+// sendToAria2RPC sends a magnet link to aria2 via its JSON-RPC API
+func sendToAria2RPC(urlStr, token, magnet string) error {
+	// Prepare the RPC request payload with token as first parameter
+	params := []interface{}{"token:" + token, []string{magnet}}
+	payload := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      "nyaa-crawler",
+		"method":  "aria2.addUri",
+		"params":  params,
+	}
+	
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal JSON payload: %v", err)
+	}
+	
+	// Create HTTP request
+	req, err := http.NewRequest("POST", urlStr, bytes.NewBuffer(jsonPayload))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %v", err)
+	}
+	
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	
+	// Send request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to aria2: %v", err)
+	}
+	defer resp.Body.Close()
+	
+	// Check response
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %v", err)
+	}
+	
+	// Check if response is valid JSON and contains no error
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("failed to parse response JSON: %v", err)
+	}
+	
+	// Check if there's an error in the response
+	if result["error"] != nil {
+		return fmt.Errorf("aria2 returned error: %v", result["error"])
+	}
+	
+	// Success
+	return nil
 }
