@@ -286,12 +286,14 @@ func (c *Crawler) Close() {
 func main() {
 	// Define command line flags
 	dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
+	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
 	flag.Parse()
 
 	// Get proxy URL from environment variable
 	proxyURL := os.Getenv("PROXY_URL")
 	log.Printf("Proxy URL: %s", proxyURL)
 	log.Printf("Database path: %s", *dbPath)
+	log.Printf("Scraping URL: %s", *url)
 	
 	crawler, err := NewCrawler(proxyURL, *dbPath)
 	if err != nil {
@@ -300,10 +302,9 @@ func main() {
 	defer crawler.Close()
 
 	// Scrape from the web instead of local file
-	url := "https://nyaa.si/"
-	log.Printf("Starting to scrape from web: %s", url)
+	log.Printf("Starting to scrape from web: %s", *url)
 	
-	if err := crawler.ScrapePage(url); err != nil {
+	if err := crawler.ScrapePage(*url); err != nil {
 		log.Printf("Error scraping from web: %v", err)
 		log.Println("Failed to scrape from web. Exiting.")
 		return

@@ -35,6 +35,16 @@ go run main.go
 
 爬虫会从Nyaa网站提取种子信息并存储到 `nyaa.db` 数据库中。
 
+### 2. 使用自定义URL运行爬虫
+
+```bash
+# 使用自定义URL
+go run main.go -url https://example.com/nyaa-clone
+
+# 同时使用自定义URL和数据库路径
+go run main.go -url https://example.com/nyaa-clone -db /path/to/custom.db
+```
+
 ### 2. 使用代理运行爬虫
 
 ```bash

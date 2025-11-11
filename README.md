@@ -73,17 +73,27 @@
    go run main.go -db /path/to/custom.db
    ```
 
-4. 同时使用代理和自定义数据库：
+4. 使用自定义URL运行爬虫：
    ```
-   PROXY_URL=socks5://proxy-server:port go run main.go -db /path/to/custom.db
+   go run main.go -url https://example.com/nyaa-clone
    ```
 
-5. 查看帮助信息：
+5. 同时使用自定义URL和数据库位置：
+   ```
+   go run main.go -url https://example.com/nyaa-clone -db /path/to/custom.db
+   ```
+
+6. 同时使用代理、自定义URL和自定义数据库：
+   ```
+   PROXY_URL=socks5://proxy-server:port go run main.go -url https://example.com/nyaa-clone -db /path/to/custom.db
+   ```
+
+7. 查看帮助信息：
    ```
    go run main.go -help
    ```
 
-6. 查看数据库中的数据：
+8. 查看数据库中的数据：
    ```
    sqlite3 nyaa.db "SELECT * FROM torrents LIMIT 10;"
    ```
