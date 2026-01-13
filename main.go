@@ -10,12 +10,42 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/net/proxy"
 )
+
+// Config holds application configuration
+type Config struct {
+	DBPath   string
+	URL      string
+	ProxyURL string
+}
+
+var (
+	cfg     Config
+	cfgOnce sync.Once
+)
+
+// LoadConfig loads configuration from flags and environment variables
+func LoadConfig() Config {
+	cfgOnce.Do(func() {
+		dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
+		url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
+		flag.Parse()
+
+		cfg = Config{
+			DBPath:   *dbPath,
+			URL:      *url,
+			ProxyURL: os.Getenv("PROXY_URL"),
+		}
+	})
+
+	return cfg
+}
 
 // Torrent represents a torrent entry from Nyaa
 type Torrent struct {
@@ -39,6 +69,11 @@ func NewDBService(dbPath string) (*DBService, error) {
 		return nil, err
 	}
 
+	// Configure connection pool
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
 	// Create torrents table if it doesn't exist
 	sqlStmt := `CREATE TABLE IF NOT EXISTS torrents (
 		id INTEGER PRIMARY KEY,
@@ -55,10 +90,22 @@ func NewDBService(dbPath string) (*DBService, error) {
 		return nil, err
 	}
 
+	// Create indexes for better query performance
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_torrents_name ON torrents(name);`,
+		`CREATE INDEX IF NOT EXISTS idx_torrents_category ON torrents(category);`,
+		`CREATE INDEX IF NOT EXISTS idx_torrents_date ON torrents(date);`,
+	}
+	for _, idx := range indexes {
+		if _, err := db.Exec(idx); err != nil {
+			log.Printf("Warning: failed to create index: %v", err)
+		}
+	}
+
 	return &DBService{db: db}, nil
 }
 
-// InsertTorrent inserts a torrent into the database
+// InsertTorrent inserts a single torrent into the database
 func (dbs *DBService) InsertTorrent(torrent Torrent) error {
 	stmt, err := dbs.db.Prepare("INSERT OR IGNORE INTO torrents(id, name, magnet, category, size, date) values(?,?,?,?,?,?)")
 	if err != nil {
@@ -68,6 +115,38 @@ func (dbs *DBService) InsertTorrent(torrent Torrent) error {
 
 	_, err = stmt.Exec(torrent.ID, torrent.Name, torrent.Magnet, torrent.Category, torrent.Size, torrent.Date)
 	return err
+}
+
+// InsertTorrents inserts multiple torrents in a single transaction
+func (dbs *DBService) InsertTorrents(torrents []Torrent) error {
+	if len(torrents) == 0 {
+		return nil
+	}
+
+	tx, err := dbs.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT OR IGNORE INTO torrents(id, name, magnet, category, size, date) values(?,?,?,?,?,?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	inserted := 0
+	for _, t := range torrents {
+		if _, err := stmt.Exec(t.ID, t.Name, t.Magnet, t.Category, t.Size, t.Date); err == nil {
+			inserted++
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	log.Printf("Batch inserted %d new torrents", inserted)
+	return nil
 }
 
 // Close closes the database connection
@@ -98,13 +177,14 @@ func (dbs *DBService) GetAllTorrents() ([]Torrent, error) {
 
 // Crawler handles the scraping logic
 type Crawler struct {
-	Client *http.Client
-	DBS    *DBService
+	Client    *http.Client
+	DBS       *DBService
+	MaxRetries int
 }
 
 // NewCrawler creates a new crawler instance
-func NewCrawler(proxyURL string, dbPath string) (*Crawler, error) {
-	dbs, err := NewDBService(dbPath)
+func NewCrawler(cfg Config) (*Crawler, error) {
+	dbs, err := NewDBService(cfg.DBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +194,8 @@ func NewCrawler(proxyURL string, dbPath string) (*Crawler, error) {
 	}
 
 	// If proxy is provided, configure it
-	if proxyURL != "" {
-		proxyURLParsed, err := url.Parse(proxyURL)
+	if cfg.ProxyURL != "" {
+		proxyURLParsed, err := url.Parse(cfg.ProxyURL)
 		if err != nil {
 			log.Printf("Error parsing proxy URL: %v", err)
 			return nil, err
@@ -139,20 +219,53 @@ func NewCrawler(proxyURL string, dbPath string) (*Crawler, error) {
 			}
 			client.Transport = transport
 		}
-		log.Printf("Using proxy: %s", proxyURL)
+		log.Printf("Using proxy: %s", cfg.ProxyURL)
 	} else {
 		log.Println("No proxy configured, using direct connection")
 	}
 
 	return &Crawler{
-		Client: client,
-		DBS:    dbs,
+		Client:    client,
+		DBS:       dbs,
+		MaxRetries: 3,
 	}, nil
 }
 
+// fetchWithRetry performs HTTP GET with automatic retry on failure
+func (c *Crawler) fetchWithRetry(url string) error {
+	var lastErr error
+
+	for attempt := 1; attempt <= c.MaxRetries; attempt++ {
+		resp, err := c.Client.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				return nil
+			}
+			lastErr = fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
+		} else {
+			lastErr = err
+		}
+
+		if attempt < c.MaxRetries {
+			backoff := time.Duration(attempt) * time.Second
+			log.Printf("Attempt %d failed, retrying in %v...", attempt, backoff)
+			time.Sleep(backoff)
+		}
+	}
+
+	return lastErr
+}
+
 // ScrapePage scrapes a single page of torrents
-func (c *Crawler) ScrapePage(url string) error {
-	resp, err := c.Client.Get(url)
+func (c *Crawler) ScrapePage(targetURL string) error {
+	// Fetch with retry
+	if err := c.fetchWithRetry(targetURL); err != nil {
+		return fmt.Errorf("failed to fetch %s: %w", targetURL, err)
+	}
+
+	// Make request again to get body
+	resp, err := c.Client.Get(targetURL)
 	if err != nil {
 		return err
 	}
@@ -221,7 +334,7 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *Torrent {
 	// For rows without comments, it's the first one
 	titleLinks := row.Find("td:nth-child(2) a")
 	titleLink := titleLinks.First()
-	
+
 	// Check if first link is a comments link
 	firstHref, firstHrefExists := titleLink.Attr("href")
 	if firstHrefExists && strings.Contains(firstHref, "#comments") {
@@ -230,7 +343,7 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *Torrent {
 			titleLink = titleLinks.Eq(1)
 		}
 	}
-	
+
 	// Extract ID from the view link
 	href, exists := titleLink.Attr("href")
 	if exists {
@@ -284,41 +397,35 @@ func (c *Crawler) Close() {
 }
 
 func main() {
-	// Define command line flags
-	dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
-	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
-	flag.Parse()
+	cfg := LoadConfig()
 
-	// Get proxy URL from environment variable
-	proxyURL := os.Getenv("PROXY_URL")
-	log.Printf("Proxy URL: %s", proxyURL)
-	log.Printf("Database path: %s", *dbPath)
-	log.Printf("Scraping URL: %s", *url)
-	
-	crawler, err := NewCrawler(proxyURL, *dbPath)
+	log.Printf("Proxy URL: %s", cfg.ProxyURL)
+	log.Printf("Database path: %s", cfg.DBPath)
+	log.Printf("Scraping URL: %s", cfg.URL)
+
+	crawler, err := NewCrawler(cfg)
 	if err != nil {
 		log.Fatal("Failed to create crawler:", err)
 	}
 	defer crawler.Close()
 
-	// Scrape from the web instead of local file
-	log.Printf("Starting to scrape from web: %s", *url)
-	
-	if err := crawler.ScrapePage(*url); err != nil {
-		log.Printf("Error scraping from web: %v", err)
-		log.Println("Failed to scrape from web. Exiting.")
+	log.Printf("Starting to scrape from web: %s", cfg.URL)
+
+	if err := crawler.ScrapePage(cfg.URL); err != nil {
+		log.Printf("Error scraping: %v", err)
+		log.Println("Failed to scrape. Exiting.")
 		return
 	}
-	
+
 	// Show some results
 	torrents, err := crawler.DBS.GetAllTorrents()
 	if err != nil {
 		log.Printf("Error retrieving torrents: %v", err)
 		return
 	}
-	
+
 	log.Printf("Successfully scraped %d torrents", len(torrents))
-	
+
 	// Show first 5 torrents
 	for i, t := range torrents {
 		if i >= 5 {
