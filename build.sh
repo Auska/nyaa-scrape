@@ -16,20 +16,20 @@ VERSION=$(date +%Y%m%d)
 
 # 编译主爬虫程序
 echo "编译主爬虫程序..."
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-linux-amd64" main.go
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-linux-amd64" ./cmd/crawler
 
 # 编译查询工具
 echo "编译查询工具..."
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-linux-amd64" tools/query_tool.go
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-linux-amd64" ./tools/query_tool.go
 
 # 为不同的平台编译（可选）
 echo "编译 Windows 版本..."
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-windows-amd64.exe" main.go
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-windows-amd64.exe" tools/query_tool.go
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-windows-amd64.exe" ./cmd/crawler
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-windows-amd64.exe" ./tools/query_tool.go
 
 echo "编译 macOS 版本..."
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-macos-amd64" main.go
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-macos-amd64" tools/query_tool.go
+GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-crawler-macos-amd64" ./cmd/crawler
+GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o "$OUTPUT_DIR/nyaa-query-macos-amd64" ./tools/query_tool.go
 
 # 创建压缩包
 echo "创建压缩包..."

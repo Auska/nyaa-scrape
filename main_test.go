@@ -5,21 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"nyaa-crawler/internal/crawler"
+	"nyaa-crawler/internal/db"
+	"nyaa-crawler/pkg/models"
 )
 
 func TestNewDBService(t *testing.T) {
-	// Create a temporary database file
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	// Test creating database service
-	dbs, err := NewDBService(dbPath)
+	dbs, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
 
-	// Verify database file was created
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		t.Error("Database file was not created")
 	}
@@ -29,14 +30,13 @@ func TestInsertAndGetTorrent(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	dbs, err := NewDBService(dbPath)
+	dbs, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
 
-	// Test inserting a torrent
-	torrent := Torrent{
+	torrent := models.Torrent{
 		ID:       12345,
 		Name:     "Test Torrent",
 		Magnet:   "magnet:?xt=urn:btih:test",
@@ -49,7 +49,6 @@ func TestInsertAndGetTorrent(t *testing.T) {
 		t.Fatalf("Failed to insert torrent: %v", err)
 	}
 
-	// Test retrieving torrents
 	torrents, err := dbs.GetAllTorrents()
 	if err != nil {
 		t.Fatalf("Failed to get torrents: %v", err)
@@ -68,13 +67,13 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	dbs, err := NewDBService(dbPath)
+	dbs, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
 
-	torrent := Torrent{
+	torrent := models.Torrent{
 		ID:       99999,
 		Name:     "Duplicate Test",
 		Magnet:   "magnet:?xt=urn:btih:dup",
@@ -83,7 +82,6 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 		Date:     "2026-01-13",
 	}
 
-	// Insert same torrent twice
 	if err := dbs.InsertTorrent(torrent); err != nil {
 		t.Fatalf("Failed to insert torrent first time: %v", err)
 	}
@@ -91,7 +89,6 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 		t.Fatalf("Failed to insert torrent second time: %v", err)
 	}
 
-	// Should only have one entry
 	torrents, err := dbs.GetAllTorrents()
 	if err != nil {
 		t.Fatalf("Failed to get torrents: %v", err)
@@ -106,13 +103,13 @@ func TestInsertTorrentsBatch(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	dbs, err := NewDBService(dbPath)
+	dbs, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
 
-	torrents := []Torrent{
+	torrents := []models.Torrent{
 		{ID: 100, Name: "Batch 1", Magnet: "magnet:1", Category: "A", Size: "1GB", Date: "2026-01-13"},
 		{ID: 200, Name: "Batch 2", Magnet: "magnet:2", Category: "B", Size: "2GB", Date: "2026-01-13"},
 		{ID: 300, Name: "Batch 3", Magnet: "magnet:3", Category: "C", Size: "3GB", Date: "2026-01-13"},
@@ -136,20 +133,18 @@ func TestInsertEmptyBatch(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	dbs, err := NewDBService(dbPath)
+	dbs, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
 
-	// Should not error on empty slice
-	if err := dbs.InsertTorrents([]Torrent{}); err != nil {
+	if err := dbs.InsertTorrents([]models.Torrent{}); err != nil {
 		t.Errorf("Expected no error on empty batch, got: %v", err)
 	}
 }
 
 func TestLoadConfig(t *testing.T) {
-	// Save original args and env
 	originalArgs := os.Args
 	originalProxy := os.Getenv("PROXY_URL")
 	defer func() {
@@ -161,11 +156,10 @@ func TestLoadConfig(t *testing.T) {
 		}
 	}()
 
-	// Set test environment
 	os.Setenv("PROXY_URL", "socks5://test:1080")
 	os.Args = []string{"test", "-db", "/test.db", "-url", "https://test.com"}
 
-	cfg := LoadConfig()
+	cfg := crawler.LoadConfig()
 
 	if cfg.DBPath != "/test.db" {
 		t.Errorf("Expected DBPath /test.db, got %s", cfg.DBPath)
@@ -182,12 +176,11 @@ func TestDatabaseIndexesCreated(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 
-	_, err := NewDBService(dbPath)
+	_, err := db.NewDBService(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 
-	// Verify indexes were created
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
