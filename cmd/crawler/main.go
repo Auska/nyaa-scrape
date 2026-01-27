@@ -10,12 +10,13 @@ import (
 func main() {
 	dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
 	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
+	proxyURL := flag.String("proxy", "", "Proxy URL (http/https/socks5)")
 	flag.Parse()
 
 	cfg := crawler.Config{
 		DBPath:   *dbPath,
 		URL:      *url,
-		ProxyURL: "",
+		ProxyURL: *proxyURL,
 	}
 
 	log.Printf("Database path: %s", cfg.DBPath)
