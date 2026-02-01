@@ -7,20 +7,64 @@
 - 抓取 Nyaa 网站的种子信息（名称、磁力链接、分类、大小、日期）
 - 将数据存储在 SQLite 数据库中
 - 避免重复插入相同的种子
-- 支持通过环境变量配置代理
-- 支持通过CLI参数进行灵活查询
-- 支持将磁力链接直接发送到Transmission下载器
+- 支持通过 CLI 参数或环境变量配置代理（HTTP/HTTPS/SOCKS5）
+- 支持通过 CLI 参数进行灵活查询
+- 支持将磁力链接直接发送到 Transmission 和 aria2 下载器
+- 支持指定下载目录
+- 支持 dry-run 预览模式
+- 自动重试机制（最多 3 次）
+- 批量插入优化
+
+## 项目结构
+
+```
+nyaa-crawler/
+├── cmd/                    # 应用程序入口
+│   └── crawler/main.go     # 主程序入口点
+├── internal/               # 内部包（仅本项目使用）
+│   ├── crawler/            # 爬虫逻辑
+│   │   └── crawler.go      # Config、Crawler、HTTP 请求、重试逻辑、页面解析
+│   └── db/                 # 数据库操作
+│       └── database.go     # DBService、CRUD 操作、索引管理
+├── pkg/                    # 公共包（可被外部引用）
+│   └── models/
+│       └── torrent.go      # Torrent 数据结构
+├── tools/
+│   └── query_tool.go       # 查询工具，支持搜索和发送到下载器
+├── configs/                # 配置文件目录（预留）
+├── scripts/                # 脚本目录（预留）
+├── test/                   # 测试数据目录（预留）
+├── release/                # 发布构建输出目录
+├── build.sh                # 构建脚本（支持 Linux/Windows/macOS）
+├── main_test.go            # 测试文件
+├── go.mod                  # Go 模块文件
+├── go.sum                  # Go 模块校验和
+├── README.md               # 本文件
+├── USAGE.md                # 详细使用说明文档
+└── AGENTS.md               # iFlow CLI 上下文配置
+```
+
+## 依赖
+
+- Go 1.19 或更高版本
+- SQLite3
+
+### Go 依赖
+
+- `github.com/PuerkitoBio/goquery v1.8.1` - HTML 解析
+- `github.com/mattn/go-sqlite3 v1.14.16` - SQLite3 驱动
+- `golang.org/x/net v0.7.0` - 网络库（SOCKS5 代理支持）
 
 ## 安装
 
 1. 克隆此仓库：
-   ```
+   ```bash
    git clone <repository-url>
    cd nyaa-crawler
    ```
 
 2. 初始化 Go 模块：
-   ```
+   ```bash
    go mod tidy
    ```
 
@@ -34,172 +78,170 @@
 
 构建完成后，会在 `release` 目录中生成各平台的二进制文件和压缩包，可以直接运行而无需安装 Go 环境。
 
-## 依赖
+**构建产物**：
+- `nyaa-crawler-linux-amd64` / `nyaa-query-linux-amd64`
+- `nyaa-crawler-windows-amd64.exe` / `nyaa-query-windows-amd64.exe`
+- `nyaa-crawler-macos-amd64` / `nyaa-query-macos-amd64`
 
-- Go 1.19 或更高版本
-- SQLite3
+## 快速开始
 
-## 安装
+### 1. 运行爬虫
 
-1. 克隆此仓库：
-   ```
-   git clone <repository-url>
-   cd nyaa-crawler
-   ```
+```bash
+# 默认配置运行
+go run ./cmd/crawler
 
-2. 初始化 Go 模块：
-   ```
-   go mod tidy
-   ```
+# 使用 CLI 参数配置代理（推荐方式）
+go run ./cmd/crawler -proxy socks5://proxy-server:port
 
-## 使用方法
+# 使用环境变量配置代理（备用方式）
+PROXY_URL=socks5://proxy-server:port go run ./cmd/crawler
 
-1. 运行爬虫：
-   ```
-   go run main.go
-   ```
+# 指定数据库位置
+go run ./cmd/crawler -db /path/to/custom.db
 
-2. 使用代理运行爬虫：
-   ```
-   # HTTP/HTTPS 代理
-   PROXY_URL=http://proxy-server:port go run main.go
-   
-   # SOCKS5 代理
-   PROXY_URL=socks5://proxy-server:port go run main.go
-   ```
+# 使用自定义URL
+go run ./cmd/crawler -url https://nyaa.si/
 
-3. 指定数据库位置：
-   ```
-   go run main.go -db /path/to/custom.db
-   ```
+# 完整示例
+go run ./cmd/crawler -proxy socks5://proxy-server:port -url https://nyaa.si/ -db /path/to/custom.db
+```
 
-4. 使用自定义URL运行爬虫：
-   ```
-   go run main.go -url https://example.com/nyaa-clone
-   ```
+### 2. 查询数据
 
-5. 同时使用自定义URL和数据库位置：
-   ```
-   go run main.go -url https://example.com/nyaa-clone -db /path/to/custom.db
-   ```
+```bash
+# 基本查询（显示最新 10 条）
+go run ./tools/query_tool.go
 
-6. 同时使用代理、自定义URL和自定义数据库：
-   ```
-   PROXY_URL=socks5://proxy-server:port go run main.go -url https://example.com/nyaa-clone -db /path/to/custom.db
-   ```
+# 文本搜索
+go run ./tools/query_tool.go -regex "One Piece"
 
-7. 查看帮助信息：
-   ```
-   go run main.go -help
-   ```
+# 指定结果数量
+go run ./tools/query_tool.go -limit 20
 
-8. 查看数据库中的数据：
-   ```
-   sqlite3 nyaa.db "SELECT * FROM torrents LIMIT 10;"
-   ```
+# 组合使用参数
+go run ./tools/query_tool.go -db /path/to/custom.db -regex "One Piece" -limit 5
+```
 
-## 查询工具使用方法
+### 3. 发送到下载器
 
-查询工具现在支持通过CLI参数进行灵活查询：
+```bash
+# 发送到 Transmission
+go run ./tools/query_tool.go -regex "One Piece" -transmission "user:pass@http://localhost:9091/transmission/rpc"
 
-1. 基本查询：
-   ```bash
-   cd tools && go run query_tool.go
-   ```
+# 发送到 aria2
+go run ./tools/query_tool.go -regex "One Piece" -aria2 "token@http://localhost:6800/jsonrpc"
 
-2. 指定数据库路径：
-   ```bash
-   cd tools && go run query_tool.go -db /path/to/database.db
-   ```
+# 指定下载目录
+go run ./tools/query_tool.go -regex "One Piece" -transmission "user:pass@http://localhost:9091/transmission/rpc" -download-dir /path/to/downloads
 
-3. 使用文本搜索（LIKE操作符）：
-   ```bash
-   cd tools && go run query_tool.go -regex "search_term"
-   ```
+# 同时发送到多个下载器
+go run ./tools/query_tool.go -regex "One Piece" -transmission "user:pass@http://localhost:9091/transmission/rpc" -aria2 "token@http://localhost:6800/jsonrpc"
 
-4. 指定返回结果数量：
-   ```bash
-   cd tools && go run query_tool.go -limit 20
-   ```
+# 预览模式（不实际发送）
+go run ./tools/query_tool.go -regex "One Piece" -transmission "user:pass@http://localhost:9091/transmission/rpc" -dry-run
+```
 
-5. 组合使用多个参数：
-   ```bash
-   cd tools && go run query_tool.go -db ../custom.db -regex "One Piece" -limit 5
-   ```
+### 4. 直接查询数据库
 
-6. 查看查询工具帮助信息：
-   ```bash
-   cd tools && go run query_tool.go -help
-   ```
+```bash
+# 查看所有种子数量
+sqlite3 nyaa.db "SELECT COUNT(*) FROM torrents;"
 
-## 发送到Transmission下载器
+# 查看前5个种子的信息
+sqlite3 nyaa.db "SELECT id, name, category, size, date FROM torrents LIMIT 5;"
 
-查询工具现在支持将磁力链接直接发送到Transmission下载器：
-
-1. 发送搜索结果到Transmission：
-   ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc"
-   ```
-
-2. 预览将要发送的内容（不实际发送）：
-   ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc" -dry-run
-   ```
-
-## 发送到aria2下载器
-
-查询工具现在还支持将磁力链接直接发送到aria2下载器：
-
-1. 发送搜索结果到aria2（使用令牌认证）：
-   ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -aria2 "token@http://localhost:6800/jsonrpc"
-   ```
-
-2. 预览将要发送的内容（不实际发送）：
-   ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -aria2 "token@http://localhost:6800/jsonrpc" -dry-run
-   ```
-
-## 同时发送到多个下载器
-
-您还可以同时将磁力链接发送到Transmission和aria2：
-   ```bash
-   cd tools && go run query_tool.go -regex "One Piece" -transmission "username:password@http://localhost:9091/transmission/rpc" -aria2 "token@http://localhost:6800/jsonrpc"
-   ```
+# 查找特定分类的种子
+sqlite3 nyaa.db "SELECT id, name, size FROM torrents WHERE category LIKE '%Anime%' LIMIT 10;"
+```
 
 ## 数据库结构
 
 创建的 SQLite 数据库包含一个名为 `torrents` 的表，结构如下：
 
-| 字段名     | 类型         | 描述         |
-|------------|--------------|--------------|
-| id         | INTEGER      | 种子ID       |
-| name       | TEXT         | 种子名称     |
-| magnet     | TEXT         | 磁力链接     |
-| category   | TEXT         | 分类         |
-| size       | TEXT         | 文件大小     |
-| date       | TEXT         | 发布日期     |
+| 字段名 | 类型 | 描述 | 约束 |
+|--------|------|------|------|
+| `id` | INTEGER | 种子唯一标识 | PRIMARY KEY |
+| `name` | TEXT | 种子名称 | - |
+| `magnet` | TEXT | 磁力链接 | - |
+| `category` | TEXT | 种子分类 | - |
+| `size` | TEXT | 文件大小 | - |
+| `date` | TEXT | 发布日期 | - |
+| `pushed_to_transmission` | BOOLEAN | 是否已发送到 Transmission | DEFAULT 0 |
+| `pushed_to_aria2` | BOOLEAN | 是否已发送到 aria2 | DEFAULT 0 |
+
+### 索引
+
+- `idx_torrents_name` - 名称索引
+- `idx_torrents_category` - 分类索引
+- `idx_torrents_date` - 日期索引
 
 ## 代理配置
 
-爬虫支持通过环境变量 `PROXY_URL` 配置代理服务器：
+爬虫支持多种方式配置代理服务器：
 
-- HTTP/HTTPS 代理: `PROXY_URL=http://proxy-server:port`
-- SOCKS5 代理: `PROXY_URL=socks5://proxy-server:port`
+**方式 1：CLI 参数（推荐）**
+```bash
+go run ./cmd/crawler -proxy http://proxy-server:port
+go run ./cmd/crawler -proxy https://proxy-server:port
+go run ./cmd/crawler -proxy socks5://proxy-server:port
+```
+
+**方式 2：环境变量（备用）**
+```bash
+PROXY_URL=http://proxy-server:port go run ./cmd/crawler
+PROXY_URL=socks5://proxy-server:port go run ./cmd/crawler
+```
+
+**优先级**：CLI 参数 > 环境变量 > 无代理
+
+## 命令行参数
+
+### 爬虫 (cmd/crawler/main.go)
+
+| 参数 | 默认值 | 描述 |
+|------|--------|------|
+| `-db` | `./nyaa.db` | SQLite 数据库文件路径 |
+| `-url` | `https://nyaa.si/` | 要抓取的 URL |
+| `-proxy` | `""` | 代理服务器地址（http/https/socks5） |
+
+### 查询工具 (tools/query_tool.go)
+
+| 参数 | 默认值 | 描述 |
+|------|--------|------|
+| `-db` | `../nyaa.db` | SQLite 数据库文件路径 |
+| `-regex` | `""` | 文本搜索模式（LIKE 操作符） |
+| `-limit` | `10` | 返回结果数量 |
+| `-transmission` | `""` | Transmission RPC URL |
+| `-aria2` | `""` | aria2 JSON-RPC URL |
+| `-download-dir` | `""` | 下载目录 |
+| `-dry-run` | `false` | 预览模式，不实际发送 |
 
 ## 自定义
 
-你可以修改 `main.go` 中的代码来：
+你可以修改代码来：
 
 1. 抓取不同的页面或搜索结果
 2. 更改数据库路径或表结构
 3. 添加更多的错误处理或日志记录
+4. 添加新的下载器支持
 
 ## 注意事项
 
 1. 请遵守目标网站的 robots.txt 和服务条款
 2. 不要过于频繁地请求，以免给服务器造成压力
 3. 此代码仅用于学习和研究目的
+4. 使用代理时请确保代理服务器的安全性
+
+## 测试
+
+```bash
+# 运行所有测试
+go test -v ./...
+
+# 运行特定测试
+go test -v -run TestNewDBService
+```
 
 ## 许可证
 
