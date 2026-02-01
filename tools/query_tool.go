@@ -25,6 +25,7 @@ func main() {
 	limit := flag.Int("limit", 10, "Number of results to show")
 	transmissionURL := flag.String("transmission", "", "Transmission RPC URL (e.g., user:pass@http://localhost:9091/transmission/rpc)")
 	aria2URL := flag.String("aria2", "", "aria2 RPC URL (e.g., token@http://localhost:6800/jsonrpc)")
+	downloadDir := flag.String("download-dir", "", "Download directory for Transmission and aria2 (e.g., /path/to/downloads)")
 	dryRun := flag.Bool("dry-run", false, "Show what would be sent to Transmission/aria2 without actually sending")
 	flag.Parse()
 
@@ -78,9 +79,9 @@ func main() {
 
 	// Process magnet links for Transmission and aria2
 	if (*transmissionURL != "" || *aria2URL != "") && !*dryRun {
-		processMagnetLinks(dbs, torrents, *transmissionURL, *aria2URL)
+		processMagnetLinks(dbs, torrents, *transmissionURL, *aria2URL, *downloadDir)
 	} else if (*transmissionURL != "" || *aria2URL != "") && *dryRun {
-		showDryRunInfo(torrents, *transmissionURL, *aria2URL)
+		showDryRunInfo(torrents, *transmissionURL, *aria2URL, *downloadDir)
 	}
 }
 
@@ -105,14 +106,14 @@ func printTorrents(torrents []models.Torrent) {
 }
 
 // processMagnetLinks handles sending magnet links to Transmission and/or aria2
-func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissionURL, aria2URL string) {
+func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
 	magnetToIdMap := collectMagnetLinks(torrents, transmissionURL, aria2URL)
 
 	if transmissionURL != "" {
 		transmissionLinks := getMagnetLinks(magnetToIdMap)
 		sendMagnetLinksToService("Transmission", transmissionLinks, func(link string) error {
 			parsedURL, user, pass := parseTransmissionURL(transmissionURL)
-			return sendToTransmissionRPC(parsedURL, user, pass, link)
+			return sendToTransmissionRPC(parsedURL, user, pass, link, downloadDir)
 		})
 		for _, magnet := range transmissionLinks {
 			if id, exists := magnetToIdMap[magnet]; exists {
@@ -125,7 +126,7 @@ func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissi
 		aria2Links := getMagnetLinks(magnetToIdMap)
 		sendMagnetLinksToService("aria2", aria2Links, func(link string) error {
 			parsedURL, token := parseAria2URL(aria2URL)
-			return sendToAria2RPC(parsedURL, token, link)
+			return sendToAria2RPC(parsedURL, token, link, downloadDir)
 		})
 		for _, magnet := range aria2Links {
 			if id, exists := magnetToIdMap[magnet]; exists {
@@ -177,20 +178,28 @@ func sendMagnetLinksToService(serviceName string, links []string, sendFunc func(
 }
 
 // showDryRunInfo shows what would be sent without actually sending
-func showDryRunInfo(torrents []models.Torrent, transmissionURL, aria2URL string) {
+func showDryRunInfo(torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
 	magnetToIdMap := collectMagnetLinks(torrents, transmissionURL, aria2URL)
 	transmissionLinks := getMagnetLinks(magnetToIdMap)
 	aria2Links := getMagnetLinks(magnetToIdMap)
 
 	if transmissionURL != "" && len(transmissionLinks) > 0 {
-		fmt.Printf("\nDry run mode - would send %d magnet links to Transmission:\n", len(transmissionLinks))
+		fmt.Printf("\nDry run mode - would send %d magnet links to Transmission", len(transmissionLinks))
+		if downloadDir != "" {
+			fmt.Printf(" (download directory: %s)", downloadDir)
+		}
+		fmt.Println(":")
 		for i, link := range transmissionLinks {
 			fmt.Printf("%d. %s\n", i+1, link)
 		}
 	}
 
 	if aria2URL != "" && len(aria2Links) > 0 {
-		fmt.Printf("\nDry run mode - would send %d magnet links to aria2:\n", len(aria2Links))
+		fmt.Printf("\nDry run mode - would send %d magnet links to aria2", len(aria2Links))
+		if downloadDir != "" {
+			fmt.Printf(" (download directory: %s)", downloadDir)
+		}
+		fmt.Println(":")
 		for i, link := range aria2Links {
 			fmt.Printf("%d. %s\n", i+1, link)
 		}
@@ -205,12 +214,19 @@ func truncateString(s string, maxLen int) string {
 }
 
 // sendToTransmissionRPC sends a magnet link to Transmission via its RPC API
-func sendToTransmissionRPC(url, user, pass, magnet string) error {
+func sendToTransmissionRPC(url, user, pass, magnet, downloadDir string) error {
+	arguments := map[string]interface{}{
+		"filename": magnet,
+	}
+
+	// Add download directory if specified
+	if downloadDir != "" {
+		arguments["download-dir"] = downloadDir
+	}
+
 	payload := map[string]interface{}{
-		"method": "torrent-add",
-		"arguments": map[string]interface{}{
-			"filename": magnet,
-		},
+		"method":    "torrent-add",
+		"arguments": arguments,
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -312,8 +328,14 @@ func parseTransmissionURL(rawURL string) (string, string, string) {
 }
 
 // sendToAria2RPC sends a magnet link to aria2 via its JSON-RPC API
-func sendToAria2RPC(urlStr, token, magnet string) error {
-	params := []interface{}{"token:" + token, []string{magnet}}
+func sendToAria2RPC(urlStr, token, magnet, downloadDir string) error {
+	// Build options array
+	options := make([]map[string]string, 0)
+	if downloadDir != "" {
+		options = append(options, map[string]string{"dir": downloadDir})
+	}
+
+	params := []interface{}{"token:" + token, []string{magnet}, options}
 	payload := map[string]interface{}{
 		"jsonrpc": "2.0",
 		"id":      "nyaa-crawler",
