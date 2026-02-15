@@ -151,7 +151,7 @@ func (dbs *DBService) GetTorrentsByPattern(pattern string, limit int) ([]models.
 // GetLatestTorrents retrieves the latest torrents
 func (dbs *DBService) GetLatestTorrents(limit int) ([]models.Torrent, error) {
 	rows, err := dbs.db.Query(
-		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents ORDER BY id DESC LIMIT ?",
+		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents ORDER BY id DESC LIMIT $1",
 		limit,
 	)
 	if err != nil {

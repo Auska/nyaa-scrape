@@ -121,7 +121,9 @@ func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissi
 		})
 		for _, magnet := range transmissionLinks {
 			if id, exists := magnetToIdMap[magnet]; exists {
-				dbs.UpdatePushedStatus(id, "pushed_to_transmission")
+				if err := dbs.UpdatePushedStatus(id, "pushed_to_transmission"); err != nil {
+					log.Printf("Failed to update transmission status for id %d: %v", id, err)
+				}
 			}
 		}
 	}
@@ -134,7 +136,9 @@ func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissi
 		})
 		for _, magnet := range aria2Links {
 			if id, exists := magnetToIdMap[magnet]; exists {
-				dbs.UpdatePushedStatus(id, "pushed_to_aria2")
+				if err := dbs.UpdatePushedStatus(id, "pushed_to_aria2"); err != nil {
+					log.Printf("Failed to update aria2 status for id %d: %v", id, err)
+				}
 			}
 		}
 	}
