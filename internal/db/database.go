@@ -178,7 +178,7 @@ func (dbs *DBService) GetMatchCount(pattern string) (int, error) {
 
 // UpdatePushedStatus updates the pushed status for a torrent
 func (dbs *DBService) UpdatePushedStatus(id int, column string) error {
-	_, err := dbs.db.Exec("UPDATE torrents SET "+column+" = 1 WHERE id = ?", id)
+	_, err := dbs.db.Exec("UPDATE torrents SET "+column+" = TRUE WHERE id = $1", id)
 	return err
 }
 
