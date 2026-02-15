@@ -21,7 +21,7 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	DBPath   string
+	DSN      string
 	URL      string
 	ProxyURL string
 }
@@ -34,14 +34,23 @@ var (
 // LoadConfig loads configuration from flags and environment variables
 func LoadConfig() Config {
 	cfgOnce.Do(func() {
-		dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
+		dsn := flag.String("db", "", "PostgreSQL connection string")
 		url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
 		flag.Parse()
 
+		// DSN priority: CLI flag > NYAA_DB env > default
+		dsnValue := *dsn
+		if dsnValue == "" {
+			dsnValue = os.Getenv("NYAA_DB")
+		}
+		if dsnValue == "" {
+			dsnValue = "postgres://localhost:5432/nyaa?sslmode=disable"
+		}
+
 		cfg = Config{
-			DBPath:   *dbPath,
+			DSN:      dsnValue,
 			URL:      *url,
-			ProxyURL: os.Getenv("PROXY_URL"),
+			ProxyURL: os.Getenv("NYAA_PROXY"),
 		}
 	})
 
@@ -57,7 +66,7 @@ type Crawler struct {
 
 // NewCrawler creates a new crawler instance
 func NewCrawler(cfg Config) (*Crawler, error) {
-	dbs, err := db.NewDBService(cfg.DBPath)
+	dbs, err := db.NewDBService(cfg.DSN)
 	if err != nil {
 		return nil, err
 	}

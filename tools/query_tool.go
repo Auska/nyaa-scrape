@@ -15,12 +15,12 @@ import (
 	"nyaa-crawler/internal/db"
 	"nyaa-crawler/pkg/models"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 )
 
 func main() {
 	// Define command line flags
-	dbPath := flag.String("db", "../nyaa.db", "Path to the SQLite database file")
+	dbPath := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
 	searchPattern := flag.String("regex", "", "Text pattern to match in torrent names (using LIKE operator)")
 	limit := flag.Int("limit", 10, "Number of results to show")
 	transmissionURL := flag.String("transmission", "", "Transmission RPC URL (e.g., user:pass@http://localhost:9091/transmission/rpc)")
@@ -29,12 +29,16 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Show what would be sent to Transmission/aria2 without actually sending")
 	flag.Parse()
 
-	// Validate database path
-	if _, err := os.Stat(*dbPath); os.IsNotExist(err) {
-		log.Fatalf("Database file does not exist: %s", *dbPath)
+	// DSN priority: CLI flag > NYAA_DB env > default
+	dsn := *dbPath
+	if dsn == "" {
+		dsn = os.Getenv("NYAA_DB")
+	}
+	if dsn == "" {
+		dsn = "postgres://localhost:5432/nyaa?sslmode=disable"
 	}
 
-	dbs, err := db.NewDBService(*dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}

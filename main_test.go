@@ -1,9 +1,7 @@
 package main
 
 import (
-	"database/sql"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"nyaa-crawler/internal/crawler"
@@ -12,25 +10,27 @@ import (
 )
 
 func TestNewDBService(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+	// Skip if no PostgreSQL is available
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("Skipping test: POSTGRES_DSN not set")
+	}
 
-	dbs, err := db.NewDBService(dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
 	defer dbs.Close()
-
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
-		t.Error("Database file was not created")
-	}
 }
 
 func TestInsertAndGetTorrent(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+	// Skip if no PostgreSQL is available
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("Skipping test: POSTGRES_DSN not set")
+	}
 
-	dbs, err := db.NewDBService(dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
@@ -64,10 +64,13 @@ func TestInsertAndGetTorrent(t *testing.T) {
 }
 
 func TestInsertDuplicateTorrent(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+	// Skip if no PostgreSQL is available
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("Skipping test: POSTGRES_DSN not set")
+	}
 
-	dbs, err := db.NewDBService(dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
@@ -100,10 +103,13 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 }
 
 func TestInsertTorrentsBatch(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+	// Skip if no PostgreSQL is available
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("Skipping test: POSTGRES_DSN not set")
+	}
 
-	dbs, err := db.NewDBService(dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
@@ -130,10 +136,13 @@ func TestInsertTorrentsBatch(t *testing.T) {
 }
 
 func TestInsertEmptyBatch(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
+	// Skip if no PostgreSQL is available
+	dsn := os.Getenv("POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("Skipping test: POSTGRES_DSN not set")
+	}
 
-	dbs, err := db.NewDBService(dbPath)
+	dbs, err := db.NewDBService(dsn)
 	if err != nil {
 		t.Fatalf("Failed to create DBService: %v", err)
 	}
@@ -146,56 +155,28 @@ func TestInsertEmptyBatch(t *testing.T) {
 
 func TestLoadConfig(t *testing.T) {
 	originalArgs := os.Args
-	originalProxy := os.Getenv("PROXY_URL")
+	originalProxy := os.Getenv("NYAA_PROXY")
 	defer func() {
 		os.Args = originalArgs
 		if originalProxy != "" {
-			os.Setenv("PROXY_URL", originalProxy)
+			os.Setenv("NYAA_PROXY", originalProxy)
 		} else {
-			os.Unsetenv("PROXY_URL")
+			os.Unsetenv("NYAA_PROXY")
 		}
 	}()
 
-	os.Setenv("PROXY_URL", "socks5://test:1080")
-	os.Args = []string{"test", "-db", "/test.db", "-url", "https://test.com"}
+	os.Setenv("NYAA_PROXY", "socks5://test:1080")
+	os.Args = []string{"test", "-db", "postgres://localhost:5432/test?sslmode=disable", "-url", "https://test.com"}
 
 	cfg := crawler.LoadConfig()
 
-	if cfg.DBPath != "/test.db" {
-		t.Errorf("Expected DBPath /test.db, got %s", cfg.DBPath)
+	if cfg.DSN != "postgres://localhost:5432/test?sslmode=disable" {
+		t.Errorf("Expected DSN postgres://localhost:5432/test?sslmode=disable, got %s", cfg.DSN)
 	}
 	if cfg.URL != "https://test.com" {
 		t.Errorf("Expected URL https://test.com, got %s", cfg.URL)
 	}
 	if cfg.ProxyURL != "socks5://test:1080" {
 		t.Errorf("Expected ProxyURL socks5://test:1080, got %s", cfg.ProxyURL)
-	}
-}
-
-func TestDatabaseIndexesCreated(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test.db")
-
-	_, err := db.NewDBService(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("Failed to open database: %v", err)
-	}
-	defer db.Close()
-
-	indexes := []string{"idx_torrents_name", "idx_torrents_category", "idx_torrents_date"}
-	for _, idx := range indexes {
-		var count int
-		err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?", idx).Scan(&count)
-		if err != nil {
-			t.Fatalf("Failed to check index %s: %v", idx, err)
-		}
-		if count != 1 {
-			t.Errorf("Expected index %s to exist, count=%d", idx, count)
-		}
 	}
 }

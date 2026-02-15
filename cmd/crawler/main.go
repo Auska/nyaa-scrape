@@ -3,23 +3,39 @@ package main
 import (
 	"flag"
 	"log"
+	"os"
 
 	"nyaa-crawler/internal/crawler"
 )
 
 func main() {
-	dbPath := flag.String("db", "./nyaa.db", "Path to the SQLite database file")
+	dbPath := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
 	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
-	proxyURL := flag.String("proxy", "", "Proxy URL (http/https/socks5)")
+	proxyURL := flag.String("proxy", "", "Proxy URL (http/https/socks5, or use NYAA_PROXY env)")
 	flag.Parse()
 
-	cfg := crawler.Config{
-		DBPath:   *dbPath,
-		URL:      *url,
-		ProxyURL: *proxyURL,
+	// DSN priority: CLI flag > NYAA_DB env > default
+	dsn := *dbPath
+	if dsn == "" {
+		dsn = os.Getenv("NYAA_DB")
+	}
+	if dsn == "" {
+		dsn = "postgres://localhost:5432/nyaa?sslmode=disable"
 	}
 
-	log.Printf("Database path: %s", cfg.DBPath)
+	// Proxy priority: CLI flag > NYAA_PROXY env
+	proxy := *proxyURL
+	if proxy == "" {
+		proxy = os.Getenv("NYAA_PROXY")
+	}
+
+	cfg := crawler.Config{
+		DSN:      dsn,
+		URL:      *url,
+		ProxyURL: proxy,
+	}
+
+	log.Printf("Database DSN: %s", cfg.DSN)
 	log.Printf("Scraping URL: %s", cfg.URL)
 
 	c, err := crawler.NewCrawler(cfg)

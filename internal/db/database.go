@@ -7,7 +7,7 @@ import (
 
 	"nyaa-crawler/pkg/models"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/lib/pq"
 )
 
 // DBService handles database operations
@@ -16,8 +16,8 @@ type DBService struct {
 }
 
 // NewDBService creates a new database service
-func NewDBService(dbPath string) (*DBService, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+func NewDBService(connStr string) (*DBService, error) {
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, err
 	}
@@ -27,6 +27,11 @@ func NewDBService(dbPath string) (*DBService, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
+	// Test connection
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
 	// Create torrents table if it doesn't exist
 	sqlStmt := `CREATE TABLE IF NOT EXISTS torrents (
 		id INTEGER PRIMARY KEY,
@@ -35,8 +40,8 @@ func NewDBService(dbPath string) (*DBService, error) {
 		category TEXT,
 		size TEXT,
 		date TEXT,
-		pushed_to_transmission BOOLEAN DEFAULT 0,
-		pushed_to_aria2 BOOLEAN DEFAULT 0
+		pushed_to_transmission BOOLEAN DEFAULT FALSE,
+		pushed_to_aria2 BOOLEAN DEFAULT FALSE
 	);`
 	_, err = db.Exec(sqlStmt)
 	if err != nil {
@@ -60,7 +65,7 @@ func NewDBService(dbPath string) (*DBService, error) {
 
 // InsertTorrent inserts a single torrent into the database
 func (dbs *DBService) InsertTorrent(torrent models.Torrent) error {
-	stmt, err := dbs.db.Prepare("INSERT OR IGNORE INTO torrents(id, name, magnet, category, size, date) values(?,?,?,?,?,?)")
+	stmt, err := dbs.db.Prepare("INSERT INTO torrents(id, name, magnet, category, size, date) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING")
 	if err != nil {
 		return err
 	}
@@ -82,7 +87,7 @@ func (dbs *DBService) InsertTorrents(torrents []models.Torrent) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT OR IGNORE INTO torrents(id, name, magnet, category, size, date) values(?,?,?,?,?,?)")
+	stmt, err := tx.Prepare("INSERT INTO torrents(id, name, magnet, category, size, date) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING")
 	if err != nil {
 		return err
 	}
@@ -132,7 +137,7 @@ func (dbs *DBService) GetAllTorrents() ([]models.Torrent, error) {
 func (dbs *DBService) GetTorrentsByPattern(pattern string, limit int) ([]models.Torrent, error) {
 	likePattern := "%" + pattern + "%"
 	rows, err := dbs.db.Query(
-		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents WHERE name LIKE ? ORDER BY id DESC LIMIT ?",
+		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents WHERE name LIKE $1 ORDER BY id DESC LIMIT $2",
 		likePattern, limit,
 	)
 	if err != nil {
@@ -167,7 +172,7 @@ func (dbs *DBService) GetTorrentCount() (total, withMagnet int, err error) {
 func (dbs *DBService) GetMatchCount(pattern string) (int, error) {
 	likePattern := "%" + pattern + "%"
 	var count int
-	err := dbs.db.QueryRow("SELECT COUNT(*) FROM torrents WHERE name LIKE ?", likePattern).Scan(&count)
+	err := dbs.db.QueryRow("SELECT COUNT(*) FROM torrents WHERE name LIKE $1", likePattern).Scan(&count)
 	return count, err
 }
 

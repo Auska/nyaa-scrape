@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/PuerkitoBio/goquery v1.8.1
-	github.com/mattn/go-sqlite3 v1.14.16
+	github.com/lib/pq v1.10.9
 	golang.org/x/net v0.7.0
 )
 
