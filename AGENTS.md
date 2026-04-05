@@ -8,38 +8,48 @@
 
 ## 环境设置
 
+Makefile 会自动设置 Go 环境变量。如需手动运行 Go 命令：
+
 ```bash
-# 加载 Go 环境变量（必须）
 export PATH="/usr/local/go/bin:$PATH"
+export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
 ## 常用命令
 
 ```bash
-# 运行爬虫
-go run ./cmd/crawler
+# 查看帮助
+make help
 
-# 使用代理运行
+# 运行爬虫
+make run
+# 或带参数运行
 go run ./cmd/crawler -proxy socks5://proxy-server:port
 
-# 查询工具
-go run ./tools/query_tool.go
+# 运行查询工具
+make query
+# 或带参数运行
 go run ./tools/query_tool.go -regex "One Piece" -limit 20
 
-# 编译项目
-go build ./...
-
 # 运行测试
-go test -v ./...
+make test
 
-# 运行测试（带覆盖率）
-go test -cover ./...
+# 代码检查
+make lint
 
-# 代码质量检查（需要加载 Go 环境变量）
-golangci-lint run ./...
+# 格式化代码
+make fmt
 
-# 构建
-./build.sh
+# 构建（所有平台）
+make build
+
+# 构建特定平台
+make build-linux
+make build-windows
+make build-macos
+
+# 清理构建产物
+make clean
 ```
 
 ## 环境变量
