@@ -1,15 +1,16 @@
 package crawler
 
 import (
-	"flag"
+	"context"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"nyaa-crawler/internal/db"
@@ -19,42 +20,14 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// Pre-compiled regex for ID extraction
+var idRegex = regexp.MustCompile(`/view/(\d+)`)
+
 // Config holds application configuration
 type Config struct {
 	DSN      string
 	URL      string
 	ProxyURL string
-}
-
-var (
-	cfg     Config
-	cfgOnce sync.Once
-)
-
-// LoadConfig loads configuration from flags and environment variables
-func LoadConfig() Config {
-	cfgOnce.Do(func() {
-		dsn := flag.String("db", "", "PostgreSQL connection string")
-		url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
-		flag.Parse()
-
-		// DSN priority: CLI flag > NYAA_DB env > default
-		dsnValue := *dsn
-		if dsnValue == "" {
-			dsnValue = os.Getenv("NYAA_DB")
-		}
-		if dsnValue == "" {
-			dsnValue = "postgres://localhost:5432/nyaa?sslmode=disable"
-		}
-
-		cfg = Config{
-			DSN:      dsnValue,
-			URL:      *url,
-			ProxyURL: os.Getenv("NYAA_PROXY"),
-		}
-	})
-
-	return cfg
 }
 
 // Crawler handles the scraping logic
@@ -91,7 +64,9 @@ func NewCrawler(cfg Config) (*Crawler, error) {
 				return nil, err
 			}
 			transport := &http.Transport{
-				Dial: dialer.Dial,
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					return dialer.Dial(network, addr)
+				},
 			}
 			client.Transport = transport
 		} else {
@@ -114,16 +89,22 @@ func NewCrawler(cfg Config) (*Crawler, error) {
 }
 
 // fetchWithRetry performs HTTP GET with automatic retry on failure
-func (c *Crawler) fetchWithRetry(url string) error {
+// Returns the response body reader if successful
+func (c *Crawler) fetchWithRetry(ctx context.Context, targetURL string) (io.ReadCloser, error) {
 	var lastErr error
 
 	for attempt := 1; attempt <= c.MaxRetries; attempt++ {
-		resp, err := c.Client.Get(url)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := c.Client.Do(req)
 		if err == nil {
-			resp.Body.Close()
 			if resp.StatusCode == 200 {
-				return nil
+				return resp.Body, nil
 			}
+			_ = resp.Body.Close()
 			lastErr = fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
 		} else {
 			lastErr = err
@@ -132,32 +113,26 @@ func (c *Crawler) fetchWithRetry(url string) error {
 		if attempt < c.MaxRetries {
 			backoff := time.Duration(attempt) * time.Second
 			log.Printf("Attempt %d failed, retrying in %v...", attempt, backoff)
-			time.Sleep(backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
 		}
 	}
 
-	return lastErr
+	return nil, lastErr
 }
 
 // ScrapePage scrapes a single page of torrents
-func (c *Crawler) ScrapePage(targetURL string) error {
-	// Fetch with retry
-	if err := c.fetchWithRetry(targetURL); err != nil {
+func (c *Crawler) ScrapePage(ctx context.Context, targetURL string) error {
+	body, err := c.fetchWithRetry(ctx, targetURL)
+	if err != nil {
 		return fmt.Errorf("failed to fetch %s: %w", targetURL, err)
 	}
+	defer func() { _ = body.Close() }()
 
-	// Make request again to get body
-	resp, err := c.Client.Get(targetURL)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("status code error: %d %s", resp.StatusCode, resp.Status)
-	}
-
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	doc, err := goquery.NewDocumentFromReader(body)
 	if err != nil {
 		return err
 	}
@@ -167,14 +142,12 @@ func (c *Crawler) ScrapePage(targetURL string) error {
 
 // ScrapeFromFile scrapes torrents from a local HTML file
 func (c *Crawler) ScrapeFromFile(filePath string) error {
-	// Open the file
 	file, err := os.Open(filePath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
-	// Create a document from the file
 	doc, err := goquery.NewDocumentFromReader(file)
 	if err != nil {
 		return err
@@ -185,16 +158,25 @@ func (c *Crawler) ScrapeFromFile(filePath string) error {
 
 // processTorrentsFromDoc extracts and inserts torrents from a goquery.Document
 func (c *Crawler) processTorrentsFromDoc(doc *goquery.Document) error {
+	var torrents []models.Torrent
+
 	doc.Find("tbody tr").Each(func(i int, s *goquery.Selection) {
 		torrent := c.parseTorrentRow(s)
 		if torrent != nil {
-			if err := c.DBS.InsertTorrent(*torrent); err != nil {
-				log.Printf("Error inserting torrent %d: %v", torrent.ID, err)
-			} else {
-				log.Printf("Inserted torrent: %s", torrent.Name)
-			}
+			torrents = append(torrents, *torrent)
 		}
 	})
+
+	if len(torrents) == 0 {
+		log.Println("No torrents found on page")
+		return nil
+	}
+
+	// Batch insert all torrents
+	if err := c.DBS.InsertTorrents(torrents); err != nil {
+		return fmt.Errorf("failed to insert torrents: %w", err)
+	}
+
 	return nil
 }
 
@@ -217,14 +199,14 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *models.Torrent {
 		}
 	}
 
-	// Extract ID from the view link
+	// Extract ID from the view link using pre-compiled regex
 	href, exists := titleLink.Attr("href")
 	if exists {
-		// Extract ID from href like "/view/2041474"
-		re := regexp.MustCompile(`/view/(\d+)`)
-		matches := re.FindStringSubmatch(href)
+		matches := idRegex.FindStringSubmatch(href)
 		if len(matches) > 1 {
-			fmt.Sscanf(matches[1], "%d", &torrent.ID)
+			if _, err := fmt.Sscanf(matches[1], "%d", &torrent.ID); err != nil {
+				log.Printf("Warning: failed to parse torrent ID: %v", err)
+			}
 		}
 	}
 
@@ -239,7 +221,6 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *models.Torrent {
 	}
 
 	// Extract magnet link
-	// Look for all links in the 3rd column (index 2, but nth-child is 1-indexed) and find the one with magnet: prefix
 	row.Find("td:nth-child(3) a").Each(func(i int, link *goquery.Selection) {
 		href, exists := link.Attr("href")
 		if exists && strings.HasPrefix(href, "magnet:") {
@@ -253,8 +234,6 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *models.Torrent {
 	// Extract date
 	dateCell := row.Find("td:nth-child(5)")
 	torrent.Date = strings.TrimSpace(dateCell.Text())
-
-	// Skip seeders, leechers, and downloads as requested
 
 	// Validate that we got a valid ID
 	if torrent.ID > 0 {

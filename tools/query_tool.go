@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,8 +13,6 @@ import (
 
 	"nyaa-crawler/internal/db"
 	"nyaa-crawler/pkg/models"
-
-	_ "github.com/lib/pq"
 )
 
 func main() {
@@ -257,12 +254,12 @@ func sendToTransmissionRPC(url, user, pass, magnet, downloadDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send request to Transmission: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
 		sessionID := resp.Header.Get("X-Transmission-Session-Id")
 		if sessionID == "" {
-			return fmt.Errorf("Transmission returned 409 Conflict but no session ID found")
+			return fmt.Errorf("transmission returned 409 Conflict but no session ID found")
 		}
 
 		req, err = http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
@@ -280,12 +277,12 @@ func sendToTransmissionRPC(url, user, pass, magnet, downloadDir string) error {
 		if err != nil {
 			return fmt.Errorf("failed to send request to Transmission (retry): %v", err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("Transmission returned status %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("transmission returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -299,7 +296,7 @@ func sendToTransmissionRPC(url, user, pass, magnet, downloadDir string) error {
 	}
 
 	if result["result"] != "success" {
-		return fmt.Errorf("Transmission returned result: %v", result["result"])
+		return fmt.Errorf("transmission returned result: %v", result["result"])
 	}
 
 	return nil
@@ -368,7 +365,7 @@ func sendToAria2RPC(urlStr, token, magnet, downloadDir string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send request to aria2: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -409,16 +406,3 @@ func parseAria2URL(rawURL string) (string, string) {
 	return rawURL, ""
 }
 
-// Dummy function to satisfy sql.Rows reference (kept for API compatibility)
-func scanTorrents(rows *sql.Rows) []models.Torrent {
-	var torrents []models.Torrent
-	for rows.Next() {
-		var t models.Torrent
-		err := rows.Scan(&t.ID, &t.Name, &t.Category, &t.Size, &t.Date, &t.Magnet, &t.PushedToTransmission, &t.PushedToAria2)
-		if err != nil {
-			log.Fatal("Failed to scan row:", err)
-		}
-		torrents = append(torrents, t)
-	}
-	return torrents
-}

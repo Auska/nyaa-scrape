@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
@@ -9,18 +10,18 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
+	dsn := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
 	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
 	proxyURL := flag.String("proxy", "", "Proxy URL (http/https/socks5, or use NYAA_PROXY env)")
 	flag.Parse()
 
 	// DSN priority: CLI flag > NYAA_DB env > default
-	dsn := *dbPath
-	if dsn == "" {
-		dsn = os.Getenv("NYAA_DB")
+	dsnValue := *dsn
+	if dsnValue == "" {
+		dsnValue = os.Getenv("NYAA_DB")
 	}
-	if dsn == "" {
-		dsn = "postgres://localhost:5432/nyaa?sslmode=disable"
+	if dsnValue == "" {
+		dsnValue = "postgres://localhost:5432/nyaa?sslmode=disable"
 	}
 
 	// Proxy priority: CLI flag > NYAA_PROXY env
@@ -30,7 +31,7 @@ func main() {
 	}
 
 	cfg := crawler.Config{
-		DSN:      dsn,
+		DSN:      dsnValue,
 		URL:      *url,
 		ProxyURL: proxy,
 	}
@@ -46,7 +47,8 @@ func main() {
 
 	log.Printf("Starting to scrape from web: %s", cfg.URL)
 
-	if err := c.ScrapePage(cfg.URL); err != nil {
+	ctx := context.Background()
+	if err := c.ScrapePage(ctx, cfg.URL); err != nil {
 		log.Printf("Error scraping: %v", err)
 		log.Println("Failed to scrape. Exiting.")
 		return
