@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"nyaa-crawler/internal/db"
 	"nyaa-crawler/pkg/models"
 
 	"github.com/PuerkitoBio/goquery"
@@ -25,7 +24,6 @@ var idRegex = regexp.MustCompile(`/view/(\d+)`)
 
 // Config holds application configuration
 type Config struct {
-	DSN      string
 	URL      string
 	ProxyURL string
 }
@@ -33,59 +31,93 @@ type Config struct {
 // Crawler handles the scraping logic
 type Crawler struct {
 	Client     *http.Client
-	DBS        *db.DBService
+	DBS        models.DBService
 	MaxRetries int
 }
 
-// NewCrawler creates a new crawler instance
-func NewCrawler(cfg Config) (*Crawler, error) {
-	dbs, err := db.NewDBService(cfg.DSN)
-	if err != nil {
-		return nil, err
-	}
+// Option is a function that configures the Crawler
+type Option func(*Crawler) error
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
+// WithDB sets the database service
+func WithDB(dbs models.DBService) Option {
+	return func(c *Crawler) error {
+		c.DBS = dbs
+		return nil
 	}
+}
 
-	// If proxy is provided, configure it
-	if cfg.ProxyURL != "" {
-		proxyURLParsed, err := url.Parse(cfg.ProxyURL)
-		if err != nil {
-			log.Printf("Error parsing proxy URL: %v", err)
-			return nil, err
+// WithHTTPClient sets a custom HTTP client
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *Crawler) error {
+		c.Client = client
+		return nil
+	}
+}
+
+// WithProxy configures proxy for the crawler
+func WithProxy(proxyURL string) Option {
+	return func(c *Crawler) error {
+		if proxyURL == "" {
+			return nil
 		}
 
-		// Check if it's a SOCKS5 proxy
+		proxyURLParsed, err := url.Parse(proxyURL)
+		if err != nil {
+			return fmt.Errorf("error parsing proxy URL: %w", err)
+		}
+
+		if c.Client == nil {
+			c.Client = &http.Client{Timeout: 30 * time.Second}
+		}
+
+		transport, ok := c.Client.Transport.(*http.Transport)
+		if !ok {
+			transport = &http.Transport{}
+		}
+
 		if proxyURLParsed.Scheme == "socks5" {
 			dialer, err := proxy.FromURL(proxyURLParsed, proxy.Direct)
 			if err != nil {
-				log.Printf("Error creating SOCKS5 proxy dialer: %v", err)
-				return nil, err
+				return fmt.Errorf("error creating SOCKS5 proxy dialer: %w", err)
 			}
-			transport := &http.Transport{
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.Dial(network, addr)
-				},
+			transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
 			}
-			client.Transport = transport
 		} else {
-			// For HTTP/HTTPS proxies
-			transport := &http.Transport{
-				Proxy: http.ProxyURL(proxyURLParsed),
-			}
-			client.Transport = transport
+			transport.Proxy = http.ProxyURL(proxyURLParsed)
 		}
-		log.Printf("Using proxy: %s", cfg.ProxyURL)
-	} else {
-		log.Println("No proxy configured, using direct connection")
+		c.Client.Transport = transport
+		log.Printf("Using proxy: %s", proxyURL)
+		return nil
+	}
+}
+
+// WithMaxRetries sets the maximum number of retries
+func WithMaxRetries(maxRetries int) Option {
+	return func(c *Crawler) error {
+		c.MaxRetries = maxRetries
+		return nil
+	}
+}
+
+// NewCrawler creates a new crawler instance with options
+func NewCrawler(opts ...Option) (*Crawler, error) {
+	c := &Crawler{
+		Client:     &http.Client{Timeout: 30 * time.Second},
+		MaxRetries: 3,
 	}
 
-	return &Crawler{
-		Client:     client,
-		DBS:        dbs,
-		MaxRetries: 3,
-	}, nil
+	for _, opt := range opts {
+		if err := opt(c); err != nil {
+			return nil, err
+		}
+	}
+
+	if c.DBS == nil {
+		return nil, fmt.Errorf("database service is required")
+	}
+
+	return c, nil
 }
 
 // fetchWithRetry performs HTTP GET with automatic retry on failure
@@ -158,14 +190,7 @@ func (c *Crawler) ScrapeFromFile(filePath string) error {
 
 // processTorrentsFromDoc extracts and inserts torrents from a goquery.Document
 func (c *Crawler) processTorrentsFromDoc(doc *goquery.Document) error {
-	var torrents []models.Torrent
-
-	doc.Find("tbody tr").Each(func(i int, s *goquery.Selection) {
-		torrent := c.parseTorrentRow(s)
-		if torrent != nil {
-			torrents = append(torrents, *torrent)
-		}
-	})
+	torrents := ParseTorrents(doc)
 
 	if len(torrents) == 0 {
 		log.Println("No torrents found on page")
@@ -180,8 +205,22 @@ func (c *Crawler) processTorrentsFromDoc(doc *goquery.Document) error {
 	return nil
 }
 
-// parseTorrentRow parses a single table row to extract torrent information
-func (c *Crawler) parseTorrentRow(row *goquery.Selection) *models.Torrent {
+// ParseTorrents extracts all torrents from a goquery.Document
+func ParseTorrents(doc *goquery.Document) []models.Torrent {
+	var torrents []models.Torrent
+
+	doc.Find("tbody tr").Each(func(i int, s *goquery.Selection) {
+		torrent := ParseTorrentRow(s)
+		if torrent != nil {
+			torrents = append(torrents, *torrent)
+		}
+	})
+
+	return torrents
+}
+
+// ParseTorrentRow parses a single table row to extract torrent information
+func ParseTorrentRow(row *goquery.Selection) *models.Torrent {
 	torrent := &models.Torrent{}
 
 	// Extract name and ID
@@ -245,5 +284,7 @@ func (c *Crawler) parseTorrentRow(row *goquery.Selection) *models.Torrent {
 
 // Close closes the crawler resources
 func (c *Crawler) Close() {
-	c.DBS.Close()
+	if c.DBS != nil {
+		c.DBS.Close()
+	}
 }

@@ -1,23 +1,21 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 
 	"nyaa-crawler/internal/db"
+	"nyaa-crawler/internal/downloader"
 	"nyaa-crawler/pkg/models"
 )
 
 func main() {
 	// Define command line flags
-	dbPath := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
+	dsn := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
 	searchPattern := flag.String("regex", "", "Text pattern to match in torrent names (using LIKE operator)")
 	limit := flag.Int("limit", 10, "Number of results to show")
 	transmissionURL := flag.String("transmission", "", "Transmission RPC URL (e.g., user:pass@http://localhost:9091/transmission/rpc)")
@@ -27,15 +25,15 @@ func main() {
 	flag.Parse()
 
 	// DSN priority: CLI flag > NYAA_DB env > default
-	dsn := *dbPath
-	if dsn == "" {
-		dsn = os.Getenv("NYAA_DB")
+	dsnValue := *dsn
+	if dsnValue == "" {
+		dsnValue = os.Getenv("NYAA_DB")
 	}
-	if dsn == "" {
-		dsn = "postgres://localhost:5432/nyaa?sslmode=disable"
+	if dsnValue == "" {
+		dsnValue = "postgres://localhost:5432/nyaa?sslmode=disable"
 	}
 
-	dbs, err := db.NewDBService(dsn)
+	dbs, err := db.NewDBService(dsnValue)
 	if err != nil {
 		log.Fatal("Failed to connect to database:", err)
 	}
@@ -79,10 +77,12 @@ func main() {
 	}
 
 	// Process magnet links for Transmission and aria2
-	if (*transmissionURL != "" || *aria2URL != "") && !*dryRun {
-		processMagnetLinks(dbs, torrents, *transmissionURL, *aria2URL, *downloadDir)
-	} else if (*transmissionURL != "" || *aria2URL != "") && *dryRun {
-		showDryRunInfo(torrents, *transmissionURL, *aria2URL, *downloadDir)
+	if *transmissionURL != "" || *aria2URL != "" {
+		if *dryRun {
+			showDryRunInfo(torrents, *transmissionURL, *aria2URL, *downloadDir)
+		} else {
+			processMagnetLinks(dbs, torrents, *transmissionURL, *aria2URL, *downloadDir)
+		}
 	}
 }
 
@@ -107,107 +107,90 @@ func printTorrents(torrents []models.Torrent) {
 }
 
 // processMagnetLinks handles sending magnet links to Transmission and/or aria2
-func processMagnetLinks(dbs *db.DBService, torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
-	magnetToIdMap := collectMagnetLinks(torrents, transmissionURL, aria2URL)
+func processMagnetLinks(dbs models.DBService, torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
+	httpClient := &http.Client{}
 
 	if transmissionURL != "" {
-		transmissionLinks := getMagnetLinks(magnetToIdMap)
-		sendMagnetLinksToService("Transmission", transmissionLinks, func(link string) error {
-			parsedURL, user, pass := parseTransmissionURL(transmissionURL)
-			return sendToTransmissionRPC(parsedURL, user, pass, link, downloadDir)
+		url, user, pass := downloader.ParseTransmissionURL(transmissionURL)
+		client := downloader.NewTransmissionClient(httpClient, downloader.TransmissionConfig{
+			URL:         url,
+			User:        user,
+			Password:    pass,
+			DownloadDir: downloadDir,
 		})
-		for _, magnet := range transmissionLinks {
-			if id, exists := magnetToIdMap[magnet]; exists {
-				if err := dbs.UpdatePushedStatus(id, "pushed_to_transmission"); err != nil {
-					log.Printf("Failed to update transmission status for id %d: %v", id, err)
+
+		sent := 0
+		for _, t := range torrents {
+			if t.Magnet != "" && !t.PushedToTransmission {
+				fmt.Printf("Sending to Transmission: %s\n", truncateString(t.Name, 50))
+				if err := client.AddTorrent(t.Magnet); err != nil {
+					fmt.Printf("  Failed: %v\n", err)
+				} else {
+					if err := dbs.UpdatePushedStatus(t.ID, "pushed_to_transmission"); err != nil {
+						log.Printf("Failed to update status for id %d: %v", t.ID, err)
+					}
+					sent++
 				}
 			}
 		}
+		fmt.Printf("Sent %d magnet links to Transmission\n", sent)
 	}
 
 	if aria2URL != "" {
-		aria2Links := getMagnetLinks(magnetToIdMap)
-		sendMagnetLinksToService("aria2", aria2Links, func(link string) error {
-			parsedURL, token := parseAria2URL(aria2URL)
-			return sendToAria2RPC(parsedURL, token, link, downloadDir)
+		url, token := downloader.ParseAria2URL(aria2URL)
+		client := downloader.NewAria2Client(httpClient, downloader.Aria2Config{
+			URL:         url,
+			Token:       token,
+			DownloadDir: downloadDir,
 		})
-		for _, magnet := range aria2Links {
-			if id, exists := magnetToIdMap[magnet]; exists {
-				if err := dbs.UpdatePushedStatus(id, "pushed_to_aria2"); err != nil {
-					log.Printf("Failed to update aria2 status for id %d: %v", id, err)
+
+		sent := 0
+		for _, t := range torrents {
+			if t.Magnet != "" && !t.PushedToAria2 {
+				fmt.Printf("Sending to aria2: %s\n", truncateString(t.Name, 50))
+				if err := client.AddUri(t.Magnet); err != nil {
+					fmt.Printf("  Failed: %v\n", err)
+				} else {
+					if err := dbs.UpdatePushedStatus(t.ID, "pushed_to_aria2"); err != nil {
+						log.Printf("Failed to update status for id %d: %v", t.ID, err)
+					}
+					sent++
 				}
 			}
 		}
+		fmt.Printf("Sent %d magnet links to aria2\n", sent)
 	}
-}
-
-// collectMagnetLinks collects magnet links for each service
-func collectMagnetLinks(torrents []models.Torrent, transmissionURL, aria2URL string) map[string]int {
-	magnetToIdMap := make(map[string]int)
-	for _, t := range torrents {
-		if transmissionURL != "" && !t.PushedToTransmission && t.Magnet != "" {
-			magnetToIdMap[t.Magnet] = t.ID
-		}
-		if aria2URL != "" && !t.PushedToAria2 && t.Magnet != "" {
-			magnetToIdMap[t.Magnet] = t.ID
-		}
-	}
-	return magnetToIdMap
-}
-
-// getMagnetLinks extracts magnet links from the map
-func getMagnetLinks(magnetToIdMap map[string]int) []string {
-	links := make([]string, 0, len(magnetToIdMap))
-	for magnet := range magnetToIdMap {
-		links = append(links, magnet)
-	}
-	return links
-}
-
-// sendMagnetLinksToService sends magnet links to a download service
-func sendMagnetLinksToService(serviceName string, links []string, sendFunc func(string) error) {
-	if len(links) == 0 {
-		return
-	}
-	fmt.Printf("\nSending %d magnet links to %s...\n", len(links), serviceName)
-	successCount := 0
-	for i, link := range links {
-		if err := sendFunc(link); err != nil {
-			fmt.Printf("Failed to send magnet link %d to %s: %v\n", i+1, serviceName, err)
-		} else {
-			fmt.Printf("Successfully sent magnet link %d to %s\n", i+1, serviceName)
-			successCount++
-		}
-	}
-	fmt.Printf("Successfully sent %d out of %d magnet links to %s\n", successCount, len(links), serviceName)
 }
 
 // showDryRunInfo shows what would be sent without actually sending
 func showDryRunInfo(torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
-	magnetToIdMap := collectMagnetLinks(torrents, transmissionURL, aria2URL)
-	transmissionLinks := getMagnetLinks(magnetToIdMap)
-	aria2Links := getMagnetLinks(magnetToIdMap)
+	var transmissionCount, aria2Count int
 
-	if transmissionURL != "" && len(transmissionLinks) > 0 {
-		fmt.Printf("\nDry run mode - would send %d magnet links to Transmission", len(transmissionLinks))
-		if downloadDir != "" {
-			fmt.Printf(" (download directory: %s)", downloadDir)
-		}
-		fmt.Println(":")
-		for i, link := range transmissionLinks {
-			fmt.Printf("%d. %s\n", i+1, link)
+	for _, t := range torrents {
+		if t.Magnet != "" {
+			if transmissionURL != "" && !t.PushedToTransmission {
+				transmissionCount++
+			}
+			if aria2URL != "" && !t.PushedToAria2 {
+				aria2Count++
+			}
 		}
 	}
 
-	if aria2URL != "" && len(aria2Links) > 0 {
-		fmt.Printf("\nDry run mode - would send %d magnet links to aria2", len(aria2Links))
+	if transmissionURL != "" && transmissionCount > 0 {
+		fmt.Printf("\nDry run: would send %d magnet links to Transmission", transmissionCount)
 		if downloadDir != "" {
 			fmt.Printf(" (download directory: %s)", downloadDir)
 		}
-		fmt.Println(":")
-		for i, link := range aria2Links {
-			fmt.Printf("%d. %s\n", i+1, link)
+		fmt.Println()
+	}
+
+	if aria2URL != "" && aria2Count > 0 {
+		fmt.Printf("\nDry run: would send %d magnet links to aria2", aria2Count)
+		if downloadDir != "" {
+			fmt.Printf(" (download directory: %s)", downloadDir)
 		}
+		fmt.Println()
 	}
 }
 
@@ -217,192 +200,3 @@ func truncateString(s string, maxLen int) string {
 	}
 	return s[:maxLen]
 }
-
-// sendToTransmissionRPC sends a magnet link to Transmission via its RPC API
-func sendToTransmissionRPC(url, user, pass, magnet, downloadDir string) error {
-	arguments := map[string]interface{}{
-		"filename": magnet,
-	}
-
-	// Add download directory if specified
-	if downloadDir != "" {
-		arguments["download-dir"] = downloadDir
-	}
-
-	payload := map[string]interface{}{
-		"method":    "torrent-add",
-		"arguments": arguments,
-	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON payload: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if user != "" && pass != "" {
-		req.SetBasicAuth(user, pass)
-	}
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request to Transmission: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusConflict {
-		sessionID := resp.Header.Get("X-Transmission-Session-Id")
-		if sessionID == "" {
-			return fmt.Errorf("transmission returned 409 Conflict but no session ID found")
-		}
-
-		req, err = http.NewRequest("POST", url, bytes.NewBuffer(jsonPayload))
-		if err != nil {
-			return fmt.Errorf("failed to create HTTP request: %v", err)
-		}
-
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Transmission-Session-Id", sessionID)
-		if user != "" && pass != "" {
-			req.SetBasicAuth(user, pass)
-		}
-
-		resp, err = client.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to send request to Transmission (retry): %v", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("transmission returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %v", err)
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse response JSON: %v", err)
-	}
-
-	if result["result"] != "success" {
-		return fmt.Errorf("transmission returned result: %v", result["result"])
-	}
-
-	return nil
-}
-
-// parseTransmissionURL extracts credentials from URL if present
-func parseTransmissionURL(rawURL string) (string, string, string) {
-	if strings.Contains(rawURL, "@") && strings.Contains(rawURL, "://") {
-		atIndex := strings.Index(rawURL, "@")
-		protoIndex := strings.Index(rawURL, "://")
-
-		if atIndex < protoIndex {
-			parts := strings.SplitN(rawURL, "@", 2)
-			if len(parts) != 2 {
-				return rawURL, "", ""
-			}
-
-			credentials := parts[0]
-			urlPart := parts[1]
-
-			creds := strings.SplitN(credentials, ":", 2)
-			if len(creds) != 2 {
-				return rawURL, "", ""
-			}
-
-			username := creds[0]
-			password := creds[1]
-
-			return urlPart, username, password
-		}
-	}
-
-	return rawURL, "", ""
-}
-
-// sendToAria2RPC sends a magnet link to aria2 via its JSON-RPC API
-func sendToAria2RPC(urlStr, token, magnet, downloadDir string) error {
-	// Build options array
-	options := make([]map[string]string, 0)
-	if downloadDir != "" {
-		options = append(options, map[string]string{"dir": downloadDir})
-	}
-
-	params := []interface{}{"token:" + token, []string{magnet}, options}
-	payload := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      "nyaa-crawler",
-		"method":  "aria2.addUri",
-		"params":  params,
-	}
-
-	jsonPayload, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON payload: %v", err)
-	}
-
-	req, err := http.NewRequest("POST", urlStr, bytes.NewBuffer(jsonPayload))
-	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %v", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send request to aria2: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read response body: %v", err)
-	}
-
-	var result map[string]interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse response JSON: %v", err)
-	}
-
-	if result["error"] != nil {
-		return fmt.Errorf("aria2 returned error: %v", result["error"])
-	}
-
-	return nil
-}
-
-// parseAria2URL extracts token from URL if present
-func parseAria2URL(rawURL string) (string, string) {
-	if strings.Contains(rawURL, "@") && strings.Contains(rawURL, "://") {
-		atIndex := strings.Index(rawURL, "@")
-		protoIndex := strings.Index(rawURL, "://")
-
-		if atIndex < protoIndex {
-			parts := strings.SplitN(rawURL, "@", 2)
-			if len(parts) != 2 {
-				return rawURL, ""
-			}
-
-			token := parts[0]
-			urlPart := parts[1]
-
-			return urlPart, token
-		}
-	}
-
-	return rawURL, ""
-}
-

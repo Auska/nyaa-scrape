@@ -11,6 +11,9 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// Verify DBService implements models.DBService interface
+var _ models.DBService = (*DBService)(nil)
+
 // DBService handles database operations
 type DBService struct {
 	DB *sql.DB

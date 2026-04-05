@@ -3,6 +3,8 @@ package crawler
 import (
 	"strconv"
 	"testing"
+
+	"nyaa-crawler/pkg/models"
 )
 
 func TestIDRegex(t *testing.T) {
@@ -44,14 +46,10 @@ func TestIDRegex(t *testing.T) {
 
 func TestConfigDefaults(t *testing.T) {
 	cfg := Config{
-		DSN:      "postgres://localhost:5432/test?sslmode=disable",
 		URL:      "https://nyaa.si/",
 		ProxyURL: "",
 	}
 
-	if cfg.DSN == "" {
-		t.Error("DSN should not be empty")
-	}
 	if cfg.URL == "" {
 		t.Error("URL should not be empty")
 	}
@@ -70,7 +68,6 @@ func TestConfigWithProxy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := Config{
-				DSN:      "postgres://localhost:5432/test",
 				URL:      "https://nyaa.si/",
 				ProxyURL: tt.proxyURL,
 			}
@@ -81,11 +78,74 @@ func TestConfigWithProxy(t *testing.T) {
 	}
 }
 
-func TestCrawlerDefaults(t *testing.T) {
-	c := &Crawler{
-		MaxRetries: 3,
+func TestCrawlerOptions(t *testing.T) {
+	// Test WithMaxRetries option
+	c := &Crawler{}
+	opt := WithMaxRetries(5)
+	if err := opt(c); err != nil {
+		t.Errorf("WithMaxRetries returned error: %v", err)
 	}
-	if c.MaxRetries != 3 {
-		t.Errorf("expected MaxRetries 3, got %d", c.MaxRetries)
+	if c.MaxRetries != 5 {
+		t.Errorf("expected MaxRetries 5, got %d", c.MaxRetries)
+	}
+}
+
+func TestNewCrawlerWithoutDB(t *testing.T) {
+	_, err := NewCrawler()
+	if err == nil {
+		t.Error("expected error when creating crawler without database")
+	}
+}
+
+// MockDBService is a mock implementation of models.DBService for testing
+type MockDBService struct {
+	Torrents []models.Torrent
+}
+
+func (m *MockDBService) InsertTorrent(torrent models.Torrent) error {
+	m.Torrents = append(m.Torrents, torrent)
+	return nil
+}
+
+func (m *MockDBService) InsertTorrents(torrents []models.Torrent) error {
+	m.Torrents = append(m.Torrents, torrents...)
+	return nil
+}
+
+func (m *MockDBService) GetAllTorrents() ([]models.Torrent, error) {
+	return m.Torrents, nil
+}
+
+func (m *MockDBService) GetTorrentsByPattern(pattern string, limit int) ([]models.Torrent, error) {
+	return m.Torrents, nil
+}
+
+func (m *MockDBService) GetLatestTorrents(limit int) ([]models.Torrent, error) {
+	return m.Torrents, nil
+}
+
+func (m *MockDBService) GetTorrentCount() (total, withMagnet int, err error) {
+	return len(m.Torrents), 0, nil
+}
+
+func (m *MockDBService) GetMatchCount(pattern string) (int, error) {
+	return 0, nil
+}
+
+func (m *MockDBService) UpdatePushedStatus(id int, column string) error {
+	return nil
+}
+
+func (m *MockDBService) Close() {}
+
+func TestNewCrawlerWithMockDB(t *testing.T) {
+	mockDB := &MockDBService{}
+	c, err := NewCrawler(WithDB(mockDB))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+		return
+	}
+	if c.DBS == nil {
+		t.Error("expected DB service to be set")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"nyaa-crawler/internal/crawler"
+	"nyaa-crawler/internal/db"
 )
 
 func main() {
@@ -30,32 +31,37 @@ func main() {
 		proxy = os.Getenv("NYAA_PROXY")
 	}
 
-	cfg := crawler.Config{
-		DSN:      dsnValue,
-		URL:      *url,
-		ProxyURL: proxy,
+	log.Printf("Database DSN: %s", dsnValue)
+	log.Printf("Scraping URL: %s", *url)
+
+	// Create database service
+	dbs, err := db.NewDBService(dsnValue)
+	if err != nil {
+		log.Fatal("Failed to create database service:", err)
 	}
 
-	log.Printf("Database DSN: %s", cfg.DSN)
-	log.Printf("Scraping URL: %s", cfg.URL)
-
-	c, err := crawler.NewCrawler(cfg)
+	// Create crawler with dependency injection
+	c, err := crawler.NewCrawler(
+		crawler.WithDB(dbs),
+		crawler.WithProxy(proxy),
+	)
 	if err != nil {
+		dbs.Close()
 		log.Fatal("Failed to create crawler:", err)
 	}
 	defer c.Close()
 
-	log.Printf("Starting to scrape from web: %s", cfg.URL)
+	log.Printf("Starting to scrape from web: %s", *url)
 
 	ctx := context.Background()
-	if err := c.ScrapePage(ctx, cfg.URL); err != nil {
+	if err := c.ScrapePage(ctx, *url); err != nil {
 		log.Printf("Error scraping: %v", err)
 		log.Println("Failed to scrape. Exiting.")
 		return
 	}
 
 	// Show some results
-	torrents, err := c.DBS.GetAllTorrents()
+	torrents, err := dbs.GetAllTorrents()
 	if err != nil {
 		log.Printf("Error retrieving torrents: %v", err)
 		return

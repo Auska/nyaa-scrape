@@ -188,14 +188,10 @@ func TestUpdatePushedStatus(t *testing.T) {
 
 func TestCrawlerConfig(t *testing.T) {
 	cfg := crawler.Config{
-		DSN:      "postgres://localhost:5432/test?sslmode=disable",
 		URL:      "https://test.com",
 		ProxyURL: "socks5://test:1080",
 	}
 
-	if cfg.DSN != "postgres://localhost:5432/test?sslmode=disable" {
-		t.Errorf("Expected DSN postgres://localhost:5432/test?sslmode=disable, got %s", cfg.DSN)
-	}
 	if cfg.URL != "https://test.com" {
 		t.Errorf("Expected URL https://test.com, got %s", cfg.URL)
 	}
@@ -213,9 +209,9 @@ func TestCrawlerScrapeTimeout(t *testing.T) {
 	}
 	defer dbs.Close()
 
-	c := &crawler.Crawler{
-		DBS:        dbs,
-		MaxRetries: 1,
+	c, err := crawler.NewCrawler(crawler.WithDB(dbs))
+	if err != nil {
+		t.Fatalf("Failed to create crawler: %v", err)
 	}
 
 	// Create a context that's already cancelled
@@ -238,9 +234,9 @@ func TestCrawlerScrapeFromFile(t *testing.T) {
 	defer dbs.Close()
 	cleanupTable(dbs)
 
-	c := &crawler.Crawler{
-		DBS:        dbs,
-		MaxRetries: 1,
+	c, err := crawler.NewCrawler(crawler.WithDB(dbs))
+	if err != nil {
+		t.Fatalf("Failed to create crawler: %v", err)
 	}
 
 	// Test with non-existent file
