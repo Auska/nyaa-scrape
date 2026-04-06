@@ -86,16 +86,16 @@ func (t *TransmissionClient) AddTorrent(magnet string) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
-		return t.handleCSRF(magnet, req, jsonPayload)
+		return t.handleCSRF(magnet, resp)
 	}
 
 	return t.checkResponse(resp)
 }
 
-func (t *TransmissionClient) handleCSRF(magnet string, originalReq *http.Request, jsonPayload []byte) error {
-	sessionID := originalReq.Header.Get("X-Transmission-Session-Id")
+func (t *TransmissionClient) handleCSRF(magnet string, resp *http.Response) error {
+	sessionID := resp.Header.Get("X-Transmission-Session-Id")
 	if sessionID == "" {
-		return fmt.Errorf("transmission returned 409 Conflict but no session ID found")
+		return fmt.Errorf("transmission returned 409 Conflict but no session ID found in response headers")
 	}
 
 	arguments := map[string]interface{}{"filename": magnet}
@@ -119,13 +119,13 @@ func (t *TransmissionClient) handleCSRF(magnet string, originalReq *http.Request
 		req.SetBasicAuth(t.config.User, t.config.Password)
 	}
 
-	resp, err := t.client.HTTPClient.Do(req)
+	newResp, err := t.client.HTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request to Transmission (retry): %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() { _ = newResp.Body.Close() }()
 
-	return t.checkResponse(resp)
+	return t.checkResponse(newResp)
 }
 
 func (t *TransmissionClient) checkResponse(resp *http.Response) error {
