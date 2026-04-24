@@ -22,7 +22,7 @@ func getTestDSN(t *testing.T) string {
 
 // cleanupTable removes all test data from the torrents table
 func cleanupTable(dbs *db.DBService) {
-	_, _ = dbs.DB.Exec("DELETE FROM torrents")
+	_ = dbs.DeleteAll()
 }
 
 func TestNewDBService(t *testing.T) {
@@ -183,20 +183,6 @@ func TestUpdatePushedStatus(t *testing.T) {
 	// Test invalid column (should return error)
 	if err := dbs.UpdatePushedStatus(500, "invalid_column"); err == nil {
 		t.Error("Expected error for invalid column, got nil")
-	}
-}
-
-func TestCrawlerConfig(t *testing.T) {
-	cfg := crawler.Config{
-		URL:      "https://test.com",
-		ProxyURL: "socks5://test:1080",
-	}
-
-	if cfg.URL != "https://test.com" {
-		t.Errorf("Expected URL https://test.com, got %s", cfg.URL)
-	}
-	if cfg.ProxyURL != "socks5://test:1080" {
-		t.Errorf("Expected ProxyURL socks5://test:1080, got %s", cfg.ProxyURL)
 	}
 }
 

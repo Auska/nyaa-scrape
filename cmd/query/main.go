@@ -81,7 +81,7 @@ func main() {
 		if *dryRun {
 			showDryRunInfo(torrents, *transmissionURL, *aria2URL, *downloadDir)
 		} else {
-			processMagnetLinks(dbs, torrents, *transmissionURL, *aria2URL, *downloadDir)
+			processDownloads(dbs, torrents, *transmissionURL, *aria2URL, *downloadDir)
 		}
 	}
 }
@@ -106,8 +106,8 @@ func printTorrents(torrents []models.Torrent) {
 	}
 }
 
-// processMagnetLinks handles sending magnet links to Transmission and/or aria2
-func processMagnetLinks(dbs models.DBService, torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
+// processDownloads handles sending magnet links to download clients
+func processDownloads(updater models.TorrentStatusUpdater, torrents []models.Torrent, transmissionURL, aria2URL, downloadDir string) {
 	httpClient := &http.Client{}
 
 	if transmissionURL != "" {
@@ -118,22 +118,10 @@ func processMagnetLinks(dbs models.DBService, torrents []models.Torrent, transmi
 			Password:    pass,
 			DownloadDir: downloadDir,
 		})
-
-		sent := 0
-		for _, t := range torrents {
-			if t.Magnet != "" && !t.PushedToTransmission {
-				fmt.Printf("Sending to Transmission: %s\n", truncateString(t.Name, 50))
-				if err := client.AddTorrent(t.Magnet); err != nil {
-					fmt.Printf("  Failed: %v\n", err)
-				} else {
-					if err := dbs.UpdatePushedStatus(t.ID, "pushed_to_transmission"); err != nil {
-						log.Printf("Failed to update status for id %d: %v", t.ID, err)
-					}
-					sent++
-				}
-			}
-		}
-		fmt.Printf("Sent %d magnet links to Transmission\n", sent)
+		result := pushMagnetLinks(client, updater, torrents, "pushed_to_transmission", func(t models.Torrent) bool {
+			return t.Magnet != "" && !t.PushedToTransmission
+		})
+		fmt.Printf("Sent %d magnet links to Transmission\n", result.Sent)
 	}
 
 	if aria2URL != "" {
@@ -143,23 +131,35 @@ func processMagnetLinks(dbs models.DBService, torrents []models.Torrent, transmi
 			Token:       token,
 			DownloadDir: downloadDir,
 		})
-
-		sent := 0
-		for _, t := range torrents {
-			if t.Magnet != "" && !t.PushedToAria2 {
-				fmt.Printf("Sending to aria2: %s\n", truncateString(t.Name, 50))
-				if err := client.AddUri(t.Magnet); err != nil {
-					fmt.Printf("  Failed: %v\n", err)
-				} else {
-					if err := dbs.UpdatePushedStatus(t.ID, "pushed_to_aria2"); err != nil {
-						log.Printf("Failed to update status for id %d: %v", t.ID, err)
-					}
-					sent++
-				}
-			}
-		}
-		fmt.Printf("Sent %d magnet links to aria2\n", sent)
+		result := pushMagnetLinks(client, updater, torrents, "pushed_to_aria2", func(t models.Torrent) bool {
+			return t.Magnet != "" && !t.PushedToAria2
+		})
+		fmt.Printf("Sent %d magnet links to aria2\n", result.Sent)
 	}
+}
+
+// PushResult holds the result of pushing magnet links to a downloader
+type PushResult struct {
+	Sent int
+}
+
+// pushMagnetLinks sends eligible magnet links to a downloader and updates their status
+func pushMagnetLinks(dl downloader.Downloader, updater models.TorrentStatusUpdater, torrents []models.Torrent, statusColumn string, shouldPush func(models.Torrent) bool) *PushResult {
+	result := &PushResult{}
+	for _, t := range torrents {
+		if shouldPush(t) {
+			fmt.Printf("Sending to %s: %s\n", statusColumn, truncateString(t.Name, 50))
+			if err := dl.AddMagnet(t.Magnet); err != nil {
+				fmt.Printf("  Failed: %v\n", err)
+				continue
+			}
+			if err := updater.UpdatePushedStatus(t.ID, statusColumn); err != nil {
+				log.Printf("Failed to update status for id %d: %v", t.ID, err)
+			}
+			result.Sent++
+		}
+	}
+	return result
 }
 
 // showDryRunInfo shows what would be sent without actually sending

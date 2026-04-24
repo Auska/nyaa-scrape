@@ -16,7 +16,7 @@ var _ models.DBService = (*DBService)(nil)
 
 // DBService handles database operations
 type DBService struct {
-	DB *sql.DB
+	db *sql.DB
 }
 
 // NewDBService creates a new database service
@@ -64,12 +64,12 @@ func NewDBService(connStr string) (*DBService, error) {
 		}
 	}
 
-	return &DBService{DB: db}, nil
+	return &DBService{db: db}, nil
 }
 
 // InsertTorrent inserts a single torrent into the database
 func (dbs *DBService) InsertTorrent(torrent models.Torrent) error {
-	stmt, err := dbs.DB.Prepare("INSERT INTO torrents(id, name, magnet, category, size, date) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING")
+	stmt, err := dbs.db.Prepare("INSERT INTO torrents(id, name, magnet, category, size, date) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING")
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (dbs *DBService) InsertTorrents(torrents []models.Torrent) error {
 		return nil
 	}
 
-	tx, err := dbs.DB.Begin()
+	tx, err := dbs.db.Begin()
 	if err != nil {
 		return err
 	}
@@ -113,12 +113,12 @@ func (dbs *DBService) InsertTorrents(torrents []models.Torrent) error {
 
 // Close closes the database connection
 func (dbs *DBService) Close() {
-	_ = dbs.DB.Close()
+	_ = dbs.db.Close()
 }
 
 // GetAllTorrents retrieves all torrents from the database
 func (dbs *DBService) GetAllTorrents() ([]models.Torrent, error) {
-	rows, err := dbs.DB.Query("SELECT id, name, magnet, category, size, date FROM torrents")
+	rows, err := dbs.db.Query("SELECT id, name, magnet, category, size, date FROM torrents")
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +140,7 @@ func (dbs *DBService) GetAllTorrents() ([]models.Torrent, error) {
 // GetTorrentsByPattern retrieves torrents matching a pattern
 func (dbs *DBService) GetTorrentsByPattern(pattern string, limit int) ([]models.Torrent, error) {
 	likePattern := "%" + pattern + "%"
-	rows, err := dbs.DB.Query(
+	rows, err := dbs.db.Query(
 		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents WHERE name LIKE $1 ORDER BY id DESC LIMIT $2",
 		likePattern, limit,
 	)
@@ -154,7 +154,7 @@ func (dbs *DBService) GetTorrentsByPattern(pattern string, limit int) ([]models.
 
 // GetLatestTorrents retrieves the latest torrents
 func (dbs *DBService) GetLatestTorrents(limit int) ([]models.Torrent, error) {
-	rows, err := dbs.DB.Query(
+	rows, err := dbs.db.Query(
 		"SELECT id, name, category, size, date, magnet, pushed_to_transmission, pushed_to_aria2 FROM torrents ORDER BY id DESC LIMIT $1",
 		limit,
 	)
@@ -168,7 +168,7 @@ func (dbs *DBService) GetLatestTorrents(limit int) ([]models.Torrent, error) {
 
 // GetTorrentCount returns the total count and magnet count
 func (dbs *DBService) GetTorrentCount() (total, withMagnet int, err error) {
-	err = dbs.DB.QueryRow("SELECT COUNT(*), COUNT(CASE WHEN magnet != '' THEN 1 END) FROM torrents").Scan(&total, &withMagnet)
+	err = dbs.db.QueryRow("SELECT COUNT(*), COUNT(CASE WHEN magnet != '' THEN 1 END) FROM torrents").Scan(&total, &withMagnet)
 	return
 }
 
@@ -176,7 +176,7 @@ func (dbs *DBService) GetTorrentCount() (total, withMagnet int, err error) {
 func (dbs *DBService) GetMatchCount(pattern string) (int, error) {
 	likePattern := "%" + pattern + "%"
 	var count int
-	err := dbs.DB.QueryRow("SELECT COUNT(*) FROM torrents WHERE name LIKE $1", likePattern).Scan(&count)
+	err := dbs.db.QueryRow("SELECT COUNT(*) FROM torrents WHERE name LIKE $1", likePattern).Scan(&count)
 	return count, err
 }
 
@@ -187,7 +187,13 @@ func (dbs *DBService) UpdatePushedStatus(id int, column string) error {
 	if column != "pushed_to_transmission" && column != "pushed_to_aria2" {
 		return fmt.Errorf("invalid column name: %s", column)
 	}
-	_, err := dbs.DB.Exec("UPDATE torrents SET "+column+" = TRUE WHERE id = $1", id)
+	_, err := dbs.db.Exec("UPDATE torrents SET "+column+" = TRUE WHERE id = $1", id)
+	return err
+}
+
+// DeleteAll removes all torrents from the database (for testing only)
+func (dbs *DBService) DeleteAll() error {
+	_, err := dbs.db.Exec("DELETE FROM torrents")
 	return err
 }
 

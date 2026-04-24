@@ -25,7 +25,7 @@ build-linux:
 	@echo "Building for Linux amd64..."
 	@mkdir -p $(OUTPUT_DIR)
 	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-crawler-linux-amd64 ./cmd/crawler
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-linux-amd64 ./tools/query_tool.go
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-linux-amd64 ./cmd/query
 	cd $(OUTPUT_DIR) && tar -czf nyaa-crawler-linux-amd64-$(VERSION).tar.gz nyaa-crawler-linux-amd64 nyaa-query-linux-amd64
 	@echo "Linux build complete: $(OUTPUT_DIR)/nyaa-crawler-linux-amd64-$(VERSION).tar.gz"
 
@@ -34,7 +34,7 @@ build-windows:
 	@echo "Building for Windows amd64..."
 	@mkdir -p $(OUTPUT_DIR)
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-crawler-windows-amd64.exe ./cmd/crawler
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-windows-amd64.exe ./tools/query_tool.go
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-windows-amd64.exe ./cmd/query
 	cd $(OUTPUT_DIR) && tar -czf nyaa-crawler-windows-amd64-$(VERSION).tar.gz nyaa-crawler-windows-amd64.exe nyaa-query-windows-amd64.exe
 	@echo "Windows build complete: $(OUTPUT_DIR)/nyaa-crawler-windows-amd64-$(VERSION).tar.gz"
 
@@ -43,7 +43,7 @@ build-macos:
 	@echo "Building for macOS amd64..."
 	@mkdir -p $(OUTPUT_DIR)
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-crawler-macos-amd64 ./cmd/crawler
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-macos-amd64 ./tools/query_tool.go
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(OUTPUT_DIR)/nyaa-query-macos-amd64 ./cmd/query
 	cd $(OUTPUT_DIR) && tar -czf nyaa-crawler-macos-amd64-$(VERSION).tar.gz nyaa-crawler-macos-amd64 nyaa-query-macos-amd64
 	@echo "macOS build complete: $(OUTPUT_DIR)/nyaa-crawler-macos-amd64-$(VERSION).tar.gz"
 
@@ -74,7 +74,7 @@ run:
 
 ## query: Run the query tool
 query:
-	go run ./tools/query_tool.go
+	go run ./cmd/query
 
 ## help: Show this help
 help:

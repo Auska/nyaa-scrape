@@ -44,40 +44,6 @@ func TestIDRegex(t *testing.T) {
 	}
 }
 
-func TestConfigDefaults(t *testing.T) {
-	cfg := Config{
-		URL:      "https://nyaa.si/",
-		ProxyURL: "",
-	}
-
-	if cfg.URL == "" {
-		t.Error("URL should not be empty")
-	}
-}
-
-func TestConfigWithProxy(t *testing.T) {
-	tests := []struct {
-		name     string
-		proxyURL string
-	}{
-		{"HTTP proxy", "http://proxy:8080"},
-		{"HTTPS proxy", "https://proxy:8080"},
-		{"SOCKS5 proxy", "socks5://proxy:1080"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := Config{
-				URL:      "https://nyaa.si/",
-				ProxyURL: tt.proxyURL,
-			}
-			if cfg.ProxyURL != tt.proxyURL {
-				t.Errorf("expected proxy %q, got %q", tt.proxyURL, cfg.ProxyURL)
-			}
-		})
-	}
-}
-
 func TestCrawlerOptions(t *testing.T) {
 	// Test WithMaxRetries option
 	c := &Crawler{}
@@ -97,55 +63,24 @@ func TestNewCrawlerWithoutDB(t *testing.T) {
 	}
 }
 
-// MockDBService is a mock implementation of models.DBService for testing
-type MockDBService struct {
+// mockTorrentInserter is a mock implementation of torrentInserter for testing
+type mockTorrentInserter struct {
 	Torrents []models.Torrent
 }
 
-func (m *MockDBService) InsertTorrent(torrent models.Torrent) error {
-	m.Torrents = append(m.Torrents, torrent)
-	return nil
-}
-
-func (m *MockDBService) InsertTorrents(torrents []models.Torrent) error {
+func (m *mockTorrentInserter) InsertTorrents(torrents []models.Torrent) error {
 	m.Torrents = append(m.Torrents, torrents...)
 	return nil
 }
 
-func (m *MockDBService) GetAllTorrents() ([]models.Torrent, error) {
-	return m.Torrents, nil
-}
-
-func (m *MockDBService) GetTorrentsByPattern(pattern string, limit int) ([]models.Torrent, error) {
-	return m.Torrents, nil
-}
-
-func (m *MockDBService) GetLatestTorrents(limit int) ([]models.Torrent, error) {
-	return m.Torrents, nil
-}
-
-func (m *MockDBService) GetTorrentCount() (total, withMagnet int, err error) {
-	return len(m.Torrents), 0, nil
-}
-
-func (m *MockDBService) GetMatchCount(pattern string) (int, error) {
-	return 0, nil
-}
-
-func (m *MockDBService) UpdatePushedStatus(id int, column string) error {
-	return nil
-}
-
-func (m *MockDBService) Close() {}
-
 func TestNewCrawlerWithMockDB(t *testing.T) {
-	mockDB := &MockDBService{}
+	mockDB := &mockTorrentInserter{}
 	c, err := NewCrawler(WithDB(mockDB))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 		return
 	}
-	if c.DBS == nil {
+	if c.dbs == nil {
 		t.Error("expected DB service to be set")
 	}
 }

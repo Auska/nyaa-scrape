@@ -39,6 +39,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to create database service:", err)
 	}
+	defer dbs.Close()
 
 	// Create crawler with dependency injection
 	c, err := crawler.NewCrawler(
@@ -46,10 +47,8 @@ func main() {
 		crawler.WithProxy(proxy),
 	)
 	if err != nil {
-		dbs.Close()
 		log.Fatal("Failed to create crawler:", err)
 	}
-	defer c.Close()
 
 	log.Printf("Starting to scrape from web: %s", *url)
 

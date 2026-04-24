@@ -22,16 +22,15 @@ import (
 // Pre-compiled regex for ID extraction
 var idRegex = regexp.MustCompile(`/view/(\d+)`)
 
-// Config holds application configuration
-type Config struct {
-	URL      string
-	ProxyURL string
+// torrentInserter is the minimal database interface the crawler needs
+type torrentInserter interface {
+	InsertTorrents(torrents []models.Torrent) error
 }
 
 // Crawler handles the scraping logic
 type Crawler struct {
 	Client     *http.Client
-	DBS        models.DBService
+	dbs        torrentInserter
 	MaxRetries int
 }
 
@@ -39,9 +38,9 @@ type Crawler struct {
 type Option func(*Crawler) error
 
 // WithDB sets the database service
-func WithDB(dbs models.DBService) Option {
+func WithDB(dbs torrentInserter) Option {
 	return func(c *Crawler) error {
-		c.DBS = dbs
+		c.dbs = dbs
 		return nil
 	}
 }
@@ -113,7 +112,7 @@ func NewCrawler(opts ...Option) (*Crawler, error) {
 		}
 	}
 
-	if c.DBS == nil {
+	if c.dbs == nil {
 		return nil, fmt.Errorf("database service is required")
 	}
 
@@ -198,7 +197,7 @@ func (c *Crawler) processTorrentsFromDoc(doc *goquery.Document) error {
 	}
 
 	// Batch insert all torrents
-	if err := c.DBS.InsertTorrents(torrents); err != nil {
+	if err := c.dbs.InsertTorrents(torrents); err != nil {
 		return fmt.Errorf("failed to insert torrents: %w", err)
 	}
 
@@ -280,11 +279,4 @@ func ParseTorrentRow(row *goquery.Selection) *models.Torrent {
 	}
 
 	return nil
-}
-
-// Close closes the crawler resources
-func (c *Crawler) Close() {
-	if c.DBS != nil {
-		c.DBS.Close()
-	}
 }

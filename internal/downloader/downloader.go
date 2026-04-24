@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// Downloader defines the interface for adding magnet links to download clients
+type Downloader interface {
+	AddMagnet(magnet string) error
+}
+
 // HTTPClient interface for HTTP operations
 type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -49,8 +54,8 @@ func NewTransmissionClient(httpClient HTTPClient, config TransmissionConfig) *Tr
 	}
 }
 
-// AddTorrent sends a magnet link to Transmission
-func (t *TransmissionClient) AddTorrent(magnet string) error {
+// AddMagnet sends a magnet link to Transmission
+func (t *TransmissionClient) AddMagnet(magnet string) error {
 	arguments := map[string]interface{}{
 		"filename": magnet,
 	}
@@ -201,8 +206,8 @@ func NewAria2Client(httpClient HTTPClient, config Aria2Config) *Aria2Client {
 	}
 }
 
-// AddUri sends a magnet link to aria2
-func (a *Aria2Client) AddUri(magnet string) error {
+// AddMagnet sends a magnet link to aria2
+func (a *Aria2Client) AddMagnet(magnet string) error {
 	options := make([]map[string]string, 0)
 	if a.config.DownloadDir != "" {
 		options = append(options, map[string]string{"dir": a.config.DownloadDir})
