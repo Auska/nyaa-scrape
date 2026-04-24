@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net/url"
 	"os"
 
 	"nyaa-crawler/internal/crawler"
@@ -11,8 +12,10 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	dsn := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
-	url := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
+	scrapeURL := flag.String("url", "https://nyaa.si/", "URL to scrape data from")
 	proxyURL := flag.String("proxy", "", "Proxy URL (http/https/socks5, or use NYAA_PROXY env)")
 	flag.Parse()
 
@@ -31,8 +34,8 @@ func main() {
 		proxy = os.Getenv("NYAA_PROXY")
 	}
 
-	log.Printf("Database DSN: %s", dsnValue)
-	log.Printf("Scraping URL: %s", *url)
+	log.Printf("Database: %s", sanitizeDSN(dsnValue))
+	log.Printf("Scraping URL: %s", *scrapeURL)
 
 	// Create database service
 	dbs, err := db.NewDBService(dsnValue)
@@ -40,6 +43,11 @@ func main() {
 		log.Fatal("Failed to create database service:", err)
 	}
 	defer dbs.Close()
+
+	// Run database migrations
+	if err := dbs.Migrate(); err != nil {
+		log.Fatal("Failed to run database migrations:", err)
+	}
 
 	// Create crawler with dependency injection
 	c, err := crawler.NewCrawler(
@@ -50,10 +58,10 @@ func main() {
 		log.Fatal("Failed to create crawler:", err)
 	}
 
-	log.Printf("Starting to scrape from web: %s", *url)
+	log.Printf("Starting to scrape from web: %s", *scrapeURL)
 
 	ctx := context.Background()
-	if err := c.ScrapePage(ctx, *url); err != nil {
+	if err := c.ScrapePage(ctx, *scrapeURL); err != nil {
 		log.Printf("Error scraping: %v", err)
 		log.Println("Failed to scrape. Exiting.")
 		return
@@ -75,4 +83,16 @@ func main() {
 		}
 		log.Printf("Torrent %d: %s (%s)", t.ID, t.Name, t.Category)
 	}
+}
+
+// sanitizeDSN masks password in database connection string for safe logging
+func sanitizeDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***"
+	}
+	if u.User != nil {
+		u.User = url.UserPassword(u.User.Username(), "***")
+	}
+	return u.String()
 }

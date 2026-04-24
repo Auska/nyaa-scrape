@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"nyaa-crawler/internal/crawler"
 	"nyaa-crawler/internal/db"
 	"nyaa-crawler/pkg/models"
 )
 
 // getTestDSN returns the test database connection string
 func getTestDSN(t *testing.T) string {
+	t.Helper()
 	dsn := os.Getenv("NYAA_DB")
 	if dsn == "" {
 		t.Skip("Skipping test: NYAA_DB not set")
@@ -20,30 +20,26 @@ func getTestDSN(t *testing.T) string {
 	return dsn
 }
 
-// cleanupTable removes all test data from the torrents table
-func cleanupTable(dbs *db.DBService) {
-	_ = dbs.DeleteAll()
+// setupTestDB creates a DBService for testing with automatic cleanup
+func setupTestDB(t *testing.T) *db.DBService {
+	t.Helper()
+	dsn := getTestDSN(t)
+	dbs, err := db.NewDBService(dsn)
+	if err != nil {
+		t.Fatalf("Failed to create DBService: %v", err)
+	}
+	t.Cleanup(func() { dbs.Close() })
+	return dbs
 }
 
 func TestNewDBService(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
+	dbs := setupTestDB(t)
+	_ = dbs
 }
 
 func TestInsertAndGetTorrent(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrent := models.Torrent{
 		ID:       12345,
@@ -54,7 +50,7 @@ func TestInsertAndGetTorrent(t *testing.T) {
 		Date:     "2026-01-13",
 	}
 
-	if err := dbs.InsertTorrent(torrent); err != nil {
+	if err := dbs.InsertTorrents([]models.Torrent{torrent}); err != nil {
 		t.Fatalf("Failed to insert torrent: %v", err)
 	}
 
@@ -73,14 +69,8 @@ func TestInsertAndGetTorrent(t *testing.T) {
 }
 
 func TestInsertDuplicateTorrent(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrent := models.Torrent{
 		ID:       99999,
@@ -91,10 +81,10 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 		Date:     "2026-01-13",
 	}
 
-	if err := dbs.InsertTorrent(torrent); err != nil {
+	if err := dbs.InsertTorrents([]models.Torrent{torrent}); err != nil {
 		t.Fatalf("Failed to insert torrent first time: %v", err)
 	}
-	if err := dbs.InsertTorrent(torrent); err != nil {
+	if err := dbs.InsertTorrents([]models.Torrent{torrent}); err != nil {
 		t.Fatalf("Failed to insert torrent second time: %v", err)
 	}
 
@@ -109,14 +99,8 @@ func TestInsertDuplicateTorrent(t *testing.T) {
 }
 
 func TestInsertTorrentsBatch(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrents := []models.Torrent{
 		{ID: 100, Name: "Batch 1", Magnet: "magnet:1", Category: "A", Size: "1GB", Date: "2026-01-13"},
@@ -139,13 +123,7 @@ func TestInsertTorrentsBatch(t *testing.T) {
 }
 
 func TestInsertEmptyBatch(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
+	dbs := setupTestDB(t)
 
 	if err := dbs.InsertTorrents([]models.Torrent{}); err != nil {
 		t.Errorf("Expected no error on empty batch, got: %v", err)
@@ -153,14 +131,8 @@ func TestInsertEmptyBatch(t *testing.T) {
 }
 
 func TestUpdatePushedStatus(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrent := models.Torrent{
 		ID:       500,
@@ -171,76 +143,24 @@ func TestUpdatePushedStatus(t *testing.T) {
 		Date:     "2026-01-13",
 	}
 
-	if err := dbs.InsertTorrent(torrent); err != nil {
+	if err := dbs.InsertTorrents([]models.Torrent{torrent}); err != nil {
 		t.Fatalf("Failed to insert torrent: %v", err)
 	}
 
-	// Test valid column
-	if err := dbs.UpdatePushedStatus(500, "pushed_to_transmission"); err != nil {
+	// Test valid target
+	if err := dbs.UpdatePushedStatus(500, models.PushTargetTransmission); err != nil {
 		t.Errorf("Expected no error, got: %v", err)
 	}
 
-	// Test invalid column (should return error)
-	if err := dbs.UpdatePushedStatus(500, "invalid_column"); err == nil {
-		t.Error("Expected error for invalid column, got nil")
-	}
-}
-
-func TestCrawlerScrapeTimeout(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-
-	c, err := crawler.NewCrawler(crawler.WithDB(dbs))
-	if err != nil {
-		t.Fatalf("Failed to create crawler: %v", err)
-	}
-
-	// Create a context that's already cancelled
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err = c.ScrapePage(ctx, "https://nyaa.si/")
-	if err == nil {
-		t.Error("Expected error for cancelled context, got nil")
-	}
-}
-
-func TestCrawlerScrapeFromFile(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
-
-	c, err := crawler.NewCrawler(crawler.WithDB(dbs))
-	if err != nil {
-		t.Fatalf("Failed to create crawler: %v", err)
-	}
-
-	// Test with non-existent file
-	err = c.ScrapeFromFile("/nonexistent/path/file.html")
-	if err == nil {
-		t.Error("Expected error for non-existent file, got nil")
+	// Test invalid target (should return error)
+	if err := dbs.UpdatePushedStatus(500, models.PushTarget("invalid_column")); err == nil {
+		t.Error("Expected error for invalid target, got nil")
 	}
 }
 
 func TestGetTorrentsByPattern(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrents := []models.Torrent{
 		{ID: 1001, Name: "One Piece Episode 1", Magnet: "magnet:1", Category: "Anime", Size: "1GB", Date: "2026-01-13"},
@@ -263,14 +183,8 @@ func TestGetTorrentsByPattern(t *testing.T) {
 }
 
 func TestGetLatestTorrents(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrents := []models.Torrent{
 		{ID: 2001, Name: "Torrent A", Magnet: "magnet:a", Category: "Anime", Size: "1GB", Date: "2026-01-13"},
@@ -291,21 +205,14 @@ func TestGetLatestTorrents(t *testing.T) {
 		t.Errorf("Expected 2 results, got %d", len(results))
 	}
 
-	// Should be ordered by ID DESC
 	if results[0].ID != 2003 {
 		t.Errorf("Expected first result ID 2003, got %d", results[0].ID)
 	}
 }
 
 func TestGetTorrentCount(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrents := []models.Torrent{
 		{ID: 3001, Name: "With Magnet", Magnet: "magnet:x", Category: "Test", Size: "1GB", Date: "2026-01-13"},
@@ -330,14 +237,8 @@ func TestGetTorrentCount(t *testing.T) {
 }
 
 func TestGetMatchCount(t *testing.T) {
-	dsn := getTestDSN(t)
-
-	dbs, err := db.NewDBService(dsn)
-	if err != nil {
-		t.Fatalf("Failed to create DBService: %v", err)
-	}
-	defer dbs.Close()
-	cleanupTable(dbs)
+	dbs := setupTestDB(t)
+	_ = dbs.DeleteAll()
 
 	torrents := []models.Torrent{
 		{ID: 4001, Name: "Test Match A", Magnet: "magnet:a", Category: "Test", Size: "1GB", Date: "2026-01-13"},

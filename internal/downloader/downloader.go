@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -54,34 +55,44 @@ func NewTransmissionClient(httpClient HTTPClient, config TransmissionConfig) *Tr
 	}
 }
 
-// AddMagnet sends a magnet link to Transmission
-func (t *TransmissionClient) AddMagnet(magnet string) error {
+// buildPayload constructs the torrent-add JSON payload
+func (t *TransmissionClient) buildPayload(magnet string) ([]byte, error) {
 	arguments := map[string]interface{}{
 		"filename": magnet,
 	}
-
 	if t.config.DownloadDir != "" {
 		arguments["download-dir"] = t.config.DownloadDir
 	}
-
 	payload := map[string]interface{}{
 		"method":    "torrent-add",
 		"arguments": arguments,
 	}
+	return json.Marshal(payload)
+}
 
-	jsonPayload, err := json.Marshal(payload)
+// buildRequest constructs an HTTP POST request with common headers
+func (t *TransmissionClient) buildRequest(payload []byte) (*http.Request, error) {
+	req, err := http.NewRequest("POST", t.config.URL, bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if t.config.User != "" && t.config.Password != "" {
+		req.SetBasicAuth(t.config.User, t.config.Password)
+	}
+	return req, nil
+}
+
+// AddMagnet sends a magnet link to Transmission
+func (t *TransmissionClient) AddMagnet(magnet string) error {
+	payload, err := t.buildPayload(magnet)
 	if err != nil {
 		return fmt.Errorf("failed to marshal JSON payload: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", t.config.URL, bytes.NewBuffer(jsonPayload))
+	req, err := t.buildRequest(payload)
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if t.config.User != "" && t.config.Password != "" {
-		req.SetBasicAuth(t.config.User, t.config.Password)
+		return err
 	}
 
 	resp, err := t.client.HTTPClient.Do(req)
@@ -103,26 +114,16 @@ func (t *TransmissionClient) handleCSRF(magnet string, resp *http.Response) erro
 		return fmt.Errorf("transmission returned 409 Conflict but no session ID found in response headers")
 	}
 
-	arguments := map[string]interface{}{"filename": magnet}
-	if t.config.DownloadDir != "" {
-		arguments["download-dir"] = t.config.DownloadDir
-	}
-	payload := map[string]interface{}{
-		"method":    "torrent-add",
-		"arguments": arguments,
-	}
-	newPayload, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest("POST", t.config.URL, bytes.NewBuffer(newPayload))
+	payload, err := t.buildPayload(magnet)
 	if err != nil {
-		return fmt.Errorf("failed to create HTTP request: %w", err)
+		return fmt.Errorf("failed to marshal JSON payload: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Transmission-Session-Id", sessionID)
-	if t.config.User != "" && t.config.Password != "" {
-		req.SetBasicAuth(t.config.User, t.config.Password)
+	req, err := t.buildRequest(payload)
+	if err != nil {
+		return err
 	}
+	req.Header.Set("X-Transmission-Session-Id", sessionID)
 
 	newResp, err := t.client.HTTPClient.Do(req)
 	if err != nil {
@@ -157,32 +158,30 @@ func (t *TransmissionClient) checkResponse(resp *http.Response) error {
 }
 
 // ParseTransmissionURL extracts credentials from URL if present
-func ParseTransmissionURL(rawURL string) (url, user, password string) {
-	if !strings.Contains(rawURL, "@") || !strings.Contains(rawURL, "://") {
+// Supports formats: http://host/path, user:pass@http://host/path
+func ParseTransmissionURL(rawURL string) (endpoint, user, password string) {
+	// Check if URL contains credentials before the protocol
+	atIdx := strings.Index(rawURL, "@")
+	protoIdx := strings.Index(rawURL, "://")
+
+	if atIdx < 0 || protoIdx < 0 || atIdx >= protoIdx {
 		return rawURL, "", ""
 	}
 
-	atIndex := strings.Index(rawURL, "@")
-	protoIndex := strings.Index(rawURL, "://")
+	credPart := rawURL[:atIdx]
+	urlPart := rawURL[atIdx+1:]
 
-	if atIndex >= protoIndex {
+	u, err := url.Parse(urlPart)
+	if err != nil {
 		return rawURL, "", ""
 	}
 
-	parts := strings.SplitN(rawURL, "@", 2)
-	if len(parts) != 2 {
-		return rawURL, "", ""
-	}
-
-	credentials := parts[0]
-	urlPart := parts[1]
-
-	creds := strings.SplitN(credentials, ":", 2)
+	creds := strings.SplitN(credPart, ":", 2)
 	if len(creds) != 2 {
-		return rawURL, "", ""
+		return urlPart, creds[0], ""
 	}
 
-	return urlPart, creds[0], creds[1]
+	return u.String(), creds[0], creds[1]
 }
 
 // Aria2Config holds aria2 RPC configuration
@@ -257,22 +256,22 @@ func (a *Aria2Client) AddMagnet(magnet string) error {
 }
 
 // ParseAria2URL extracts token from URL if present
-func ParseAria2URL(rawURL string) (url, token string) {
-	if !strings.Contains(rawURL, "@") || !strings.Contains(rawURL, "://") {
+// Supports formats: http://host/path, token@http://host/path
+func ParseAria2URL(rawURL string) (endpoint, token string) {
+	atIdx := strings.Index(rawURL, "@")
+	protoIdx := strings.Index(rawURL, "://")
+
+	if atIdx < 0 || protoIdx < 0 || atIdx >= protoIdx {
 		return rawURL, ""
 	}
 
-	atIndex := strings.Index(rawURL, "@")
-	protoIndex := strings.Index(rawURL, "://")
+	tokenPart := rawURL[:atIdx]
+	urlPart := rawURL[atIdx+1:]
 
-	if atIndex >= protoIndex {
+	u, err := url.Parse(urlPart)
+	if err != nil {
 		return rawURL, ""
 	}
 
-	parts := strings.SplitN(rawURL, "@", 2)
-	if len(parts) != 2 {
-		return rawURL, ""
-	}
-
-	return parts[1], parts[0]
+	return u.String(), tokenPart
 }

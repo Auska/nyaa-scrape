@@ -1,6 +1,7 @@
 package crawler
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
@@ -45,14 +46,13 @@ func TestIDRegex(t *testing.T) {
 }
 
 func TestCrawlerOptions(t *testing.T) {
-	// Test WithMaxRetries option
 	c := &Crawler{}
 	opt := WithMaxRetries(5)
 	if err := opt(c); err != nil {
 		t.Errorf("WithMaxRetries returned error: %v", err)
 	}
-	if c.MaxRetries != 5 {
-		t.Errorf("expected MaxRetries 5, got %d", c.MaxRetries)
+	if c.maxRetries != 5 {
+		t.Errorf("expected maxRetries 5, got %d", c.maxRetries)
 	}
 }
 
@@ -82,5 +82,22 @@ func TestNewCrawlerWithMockDB(t *testing.T) {
 	}
 	if c.dbs == nil {
 		t.Error("expected DB service to be set")
+	}
+}
+
+func TestCrawlerScrapeTimeout(t *testing.T) {
+	mockDB := &mockTorrentInserter{}
+	c, err := NewCrawler(WithDB(mockDB))
+	if err != nil {
+		t.Fatalf("Failed to create crawler: %v", err)
+	}
+
+	// Create a context that's already cancelled
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = c.ScrapePage(ctx, "https://nyaa.si/")
+	if err == nil {
+		t.Error("Expected error for cancelled context, got nil")
 	}
 }

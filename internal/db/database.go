@@ -2,12 +2,14 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"nyaa-crawler/pkg/models"
 
+	"github.com/lib/pq"
 	_ "github.com/lib/pq"
 )
 
@@ -36,7 +38,11 @@ func NewDBService(connStr string) (*DBService, error) {
 		return nil, err
 	}
 
-	// Create torrents table if it doesn't exist
+	return &DBService{db: db}, nil
+}
+
+// Migrate creates tables and indexes if they don't exist
+func (dbs *DBService) Migrate() error {
 	sqlStmt := `CREATE TABLE IF NOT EXISTS torrents (
 		id INTEGER PRIMARY KEY,
 		name TEXT,
@@ -47,36 +53,24 @@ func NewDBService(connStr string) (*DBService, error) {
 		pushed_to_transmission BOOLEAN DEFAULT FALSE,
 		pushed_to_aria2 BOOLEAN DEFAULT FALSE
 	);`
-	_, err = db.Exec(sqlStmt)
-	if err != nil {
-		return nil, err
+	if _, err := dbs.db.Exec(sqlStmt); err != nil {
+		return fmt.Errorf("failed to create torrents table: %w", err)
 	}
 
 	// Create indexes for better query performance
+	// Note: B-tree index on name is ineffective for LIKE '%pattern%' queries.
+	// For full-text search, consider using pg_trgm GIN index or tsvector.
 	indexes := []string{
-		`CREATE INDEX IF NOT EXISTS idx_torrents_name ON torrents(name);`,
 		`CREATE INDEX IF NOT EXISTS idx_torrents_category ON torrents(category);`,
 		`CREATE INDEX IF NOT EXISTS idx_torrents_date ON torrents(date);`,
 	}
 	for _, idx := range indexes {
-		if _, err := db.Exec(idx); err != nil {
+		if _, err := dbs.db.Exec(idx); err != nil {
 			log.Printf("Warning: failed to create index: %v", err)
 		}
 	}
 
-	return &DBService{db: db}, nil
-}
-
-// InsertTorrent inserts a single torrent into the database
-func (dbs *DBService) InsertTorrent(torrent models.Torrent) error {
-	stmt, err := dbs.db.Prepare("INSERT INTO torrents(id, name, magnet, category, size, date) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO NOTHING")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = stmt.Close() }()
-
-	_, err = stmt.Exec(torrent.ID, torrent.Name, torrent.Magnet, torrent.Category, torrent.Size, torrent.Date)
-	return err
+	return nil
 }
 
 // InsertTorrents inserts multiple torrents in a single transaction
@@ -97,15 +91,32 @@ func (dbs *DBService) InsertTorrents(torrents []models.Torrent) error {
 	}
 	defer func() { _ = stmt.Close() }()
 
+	var insertErrs []error
 	inserted := 0
 	for _, t := range torrents {
-		if _, err := stmt.Exec(t.ID, t.Name, t.Magnet, t.Category, t.Size, t.Date); err == nil {
-			inserted++
+		result, err := stmt.Exec(t.ID, t.Name, t.Magnet, t.Category, t.Size, t.Date)
+		if err != nil {
+			var pqErr *pq.Error
+			if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+				// unique_violation: expected with ON CONFLICT DO NOTHING, skip
+				continue
+			}
+			insertErrs = append(insertErrs, fmt.Errorf("torrent %d: %w", t.ID, err))
+			continue
 		}
+		affected, _ := result.RowsAffected()
+		inserted += int(affected)
 	}
 
 	if err := tx.Commit(); err != nil {
 		return err
+	}
+
+	if len(insertErrs) > 0 {
+		log.Printf("Batch insert completed with %d errors out of %d torrents", len(insertErrs), len(torrents))
+		for _, e := range insertErrs {
+			log.Printf("  Insert error: %v", e)
+		}
 	}
 	log.Printf("Batch inserted %d new torrents", inserted)
 	return nil
@@ -116,9 +127,9 @@ func (dbs *DBService) Close() {
 	_ = dbs.db.Close()
 }
 
-// GetAllTorrents retrieves all torrents from the database
+// GetAllTorrents retrieves torrents from the database with a safety limit
 func (dbs *DBService) GetAllTorrents() ([]models.Torrent, error) {
-	rows, err := dbs.db.Query("SELECT id, name, magnet, category, size, date FROM torrents")
+	rows, err := dbs.db.Query("SELECT id, name, magnet, category, size, date FROM torrents LIMIT 10000")
 	if err != nil {
 		return nil, err
 	}
@@ -181,11 +192,10 @@ func (dbs *DBService) GetMatchCount(pattern string) (int, error) {
 }
 
 // UpdatePushedStatus updates the pushed status for a torrent
-// column must be either "pushed_to_transmission" or "pushed_to_aria2"
-func (dbs *DBService) UpdatePushedStatus(id int, column string) error {
-	// Whitelist validation to prevent SQL injection
-	if column != "pushed_to_transmission" && column != "pushed_to_aria2" {
-		return fmt.Errorf("invalid column name: %s", column)
+func (dbs *DBService) UpdatePushedStatus(id int, target models.PushTarget) error {
+	column := string(target)
+	if target != models.PushTargetTransmission && target != models.PushTargetAria2 {
+		return fmt.Errorf("invalid push target: %s", column)
 	}
 	_, err := dbs.db.Exec("UPDATE torrents SET "+column+" = TRUE WHERE id = $1", id)
 	return err

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"nyaa-crawler/internal/db"
 	"nyaa-crawler/internal/downloader"
@@ -14,6 +15,8 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
 	// Define command line flags
 	dsn := flag.String("db", "", "PostgreSQL connection string (or use NYAA_DB env)")
 	searchPattern := flag.String("regex", "", "Text pattern to match in torrent names (using LIKE operator)")
@@ -102,7 +105,7 @@ func printTorrents(torrents []models.Torrent) {
 		}
 
 		fmt.Printf("%-10d %-50s %-25s %-10s %-10s %-12s %-12s\n",
-			t.ID, truncateString(t.Name, 49), t.Category, t.Size, t.Date, transStatus, aria2Status)
+			t.ID, truncateRunes(t.Name, 49), t.Category, t.Size, t.Date, transStatus, aria2Status)
 	}
 }
 
@@ -111,27 +114,27 @@ func processDownloads(updater models.TorrentStatusUpdater, torrents []models.Tor
 	httpClient := &http.Client{}
 
 	if transmissionURL != "" {
-		url, user, pass := downloader.ParseTransmissionURL(transmissionURL)
+		ep, user, pass := downloader.ParseTransmissionURL(transmissionURL)
 		client := downloader.NewTransmissionClient(httpClient, downloader.TransmissionConfig{
-			URL:         url,
+			URL:         ep,
 			User:        user,
 			Password:    pass,
 			DownloadDir: downloadDir,
 		})
-		result := pushMagnetLinks(client, updater, torrents, "pushed_to_transmission", func(t models.Torrent) bool {
+		result := pushMagnetLinks(client, updater, torrents, models.PushTargetTransmission, func(t models.Torrent) bool {
 			return t.Magnet != "" && !t.PushedToTransmission
 		})
 		fmt.Printf("Sent %d magnet links to Transmission\n", result.Sent)
 	}
 
 	if aria2URL != "" {
-		url, token := downloader.ParseAria2URL(aria2URL)
+		ep, token := downloader.ParseAria2URL(aria2URL)
 		client := downloader.NewAria2Client(httpClient, downloader.Aria2Config{
-			URL:         url,
+			URL:         ep,
 			Token:       token,
 			DownloadDir: downloadDir,
 		})
-		result := pushMagnetLinks(client, updater, torrents, "pushed_to_aria2", func(t models.Torrent) bool {
+		result := pushMagnetLinks(client, updater, torrents, models.PushTargetAria2, func(t models.Torrent) bool {
 			return t.Magnet != "" && !t.PushedToAria2
 		})
 		fmt.Printf("Sent %d magnet links to aria2\n", result.Sent)
@@ -144,16 +147,16 @@ type PushResult struct {
 }
 
 // pushMagnetLinks sends eligible magnet links to a downloader and updates their status
-func pushMagnetLinks(dl downloader.Downloader, updater models.TorrentStatusUpdater, torrents []models.Torrent, statusColumn string, shouldPush func(models.Torrent) bool) *PushResult {
+func pushMagnetLinks(dl downloader.Downloader, updater models.TorrentStatusUpdater, torrents []models.Torrent, target models.PushTarget, shouldPush func(models.Torrent) bool) *PushResult {
 	result := &PushResult{}
 	for _, t := range torrents {
 		if shouldPush(t) {
-			fmt.Printf("Sending to %s: %s\n", statusColumn, truncateString(t.Name, 50))
+			fmt.Printf("Sending to %s: %s\n", target, truncateRunes(t.Name, 50))
 			if err := dl.AddMagnet(t.Magnet); err != nil {
 				fmt.Printf("  Failed: %v\n", err)
 				continue
 			}
-			if err := updater.UpdatePushedStatus(t.ID, statusColumn); err != nil {
+			if err := updater.UpdatePushedStatus(t.ID, target); err != nil {
 				log.Printf("Failed to update status for id %d: %v", t.ID, err)
 			}
 			result.Sent++
@@ -194,9 +197,11 @@ func showDryRunInfo(torrents []models.Torrent, transmissionURL, aria2URL, downlo
 	}
 }
 
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+// truncateRunes truncates a string to at most maxRunes runes, preserving UTF-8 boundaries
+func truncateRunes(s string, maxRunes int) string {
+	if utf8.RuneCountInString(s) <= maxRunes {
 		return s
 	}
-	return s[:maxLen]
+	runes := []rune(s)
+	return string(runes[:maxRunes])
 }

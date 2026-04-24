@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,9 +30,9 @@ type torrentInserter interface {
 
 // Crawler handles the scraping logic
 type Crawler struct {
-	Client     *http.Client
+	client     *http.Client
 	dbs        torrentInserter
-	MaxRetries int
+	maxRetries int
 }
 
 // Option is a function that configures the Crawler
@@ -48,7 +49,7 @@ func WithDB(dbs torrentInserter) Option {
 // WithHTTPClient sets a custom HTTP client
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *Crawler) error {
-		c.Client = client
+		c.client = client
 		return nil
 	}
 }
@@ -65,11 +66,11 @@ func WithProxy(proxyURL string) Option {
 			return fmt.Errorf("error parsing proxy URL: %w", err)
 		}
 
-		if c.Client == nil {
-			c.Client = &http.Client{Timeout: 30 * time.Second}
+		if c.client == nil {
+			c.client = &http.Client{Timeout: 30 * time.Second}
 		}
 
-		transport, ok := c.Client.Transport.(*http.Transport)
+		transport, ok := c.client.Transport.(*http.Transport)
 		if !ok {
 			transport = &http.Transport{}
 		}
@@ -85,7 +86,7 @@ func WithProxy(proxyURL string) Option {
 		} else {
 			transport.Proxy = http.ProxyURL(proxyURLParsed)
 		}
-		c.Client.Transport = transport
+		c.client.Transport = transport
 		log.Printf("Using proxy: %s", proxyURL)
 		return nil
 	}
@@ -94,7 +95,7 @@ func WithProxy(proxyURL string) Option {
 // WithMaxRetries sets the maximum number of retries
 func WithMaxRetries(maxRetries int) Option {
 	return func(c *Crawler) error {
-		c.MaxRetries = maxRetries
+		c.maxRetries = maxRetries
 		return nil
 	}
 }
@@ -102,8 +103,8 @@ func WithMaxRetries(maxRetries int) Option {
 // NewCrawler creates a new crawler instance with options
 func NewCrawler(opts ...Option) (*Crawler, error) {
 	c := &Crawler{
-		Client:     &http.Client{Timeout: 30 * time.Second},
-		MaxRetries: 3,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		maxRetries: 3,
 	}
 
 	for _, opt := range opts {
@@ -124,13 +125,13 @@ func NewCrawler(opts ...Option) (*Crawler, error) {
 func (c *Crawler) fetchWithRetry(ctx context.Context, targetURL string) (io.ReadCloser, error) {
 	var lastErr error
 
-	for attempt := 1; attempt <= c.MaxRetries; attempt++ {
+	for attempt := 1; attempt <= c.maxRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
 		if err != nil {
 			return nil, err
 		}
 
-		resp, err := c.Client.Do(req)
+		resp, err := c.client.Do(req)
 		if err == nil {
 			if resp.StatusCode == 200 {
 				return resp.Body, nil
@@ -141,7 +142,7 @@ func (c *Crawler) fetchWithRetry(ctx context.Context, targetURL string) (io.Read
 			lastErr = err
 		}
 
-		if attempt < c.MaxRetries {
+		if attempt < c.maxRetries {
 			backoff := time.Duration(attempt) * time.Second
 			log.Printf("Attempt %d failed, retrying in %v...", attempt, backoff)
 			select {
@@ -242,8 +243,11 @@ func ParseTorrentRow(row *goquery.Selection) *models.Torrent {
 	if exists {
 		matches := idRegex.FindStringSubmatch(href)
 		if len(matches) > 1 {
-			if _, err := fmt.Sscanf(matches[1], "%d", &torrent.ID); err != nil {
+			id, err := strconv.Atoi(matches[1])
+			if err != nil {
 				log.Printf("Warning: failed to parse torrent ID: %v", err)
+			} else {
+				torrent.ID = id
 			}
 		}
 	}
